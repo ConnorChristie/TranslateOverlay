@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
+    android:padding="24dp"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <!-- Overlay Permission Status -->
+    <TextView
+        android:id="@+id/overlayStatus"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Overlay permission: unknown"
+        android:textSize="16sp"
+        android:layout_marginBottom="8dp"/>
+
+    <!-- Button to request Overlay Permission -->
+    <Button
+        android:id="@+id/requestOverlayBtn"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Enable Overlay Permission"
+        android:layout_marginBottom="24dp"/>
+
+    <!-- Accessibility Permission Status -->
+    <TextView
+        android:id="@+id/accessibilityStatus"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Accessibility service: unknown"
+        android:textSize="16sp"
+        android:layout_marginBottom="8dp"/>
+
+    <!-- Button to open Accessibility Settings -->
+    <Button
+        android:id="@+id/requestAccessibilityBtn"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Enable Accessibility Service" />
+
+    <Button
+        android:id="@+id/startTranscriptionBtn"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Start Transcription"
+        android:layout_marginTop="16dp"/>
+
+</LinearLayout>
