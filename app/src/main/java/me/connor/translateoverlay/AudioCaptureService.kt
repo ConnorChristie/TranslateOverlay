@@ -5,7 +5,10 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioPlaybackCaptureConfiguration
@@ -38,26 +41,35 @@ class AudioCaptureService : Service() {
     private lateinit var recorder: AudioRecord
     private lateinit var mediaProjection: MediaProjection
     private lateinit var recognizer: OnlineRecognizer
+    private lateinit var punct: OfflinePunctuation
     private val executor = Executors.newSingleThreadExecutor()
     private var running = true
-    private lateinit var translator: Translator
-
     private var lastText = ""
-    private var lastTranslationTimeMs = 0L
+
+    private var translatorService: TranslatorService? = null
+    private var isBound = false
+
+    private val conn = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName, service: IBinder) {
+            val binder = service as TranslatorService.TranslationBinder
+            translatorService = binder.getService()
+            isBound = true
+        }
+
+        override fun onServiceDisconnected(name: ComponentName) {
+            translatorService = null
+            isBound = false
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
         overlay = FloatingOverlay(this)
-        overlay.show()
+        overlay.show(false)
 
-        val options = TranslatorOptions.Builder()
-            .setSourceLanguage(TranslateLanguage.CHINESE)
-            .setTargetLanguage(TranslateLanguage.ENGLISH)
-            .build()
-        translator = Translation.getClient(options)
-        translator.downloadModelIfNeeded()
-            .addOnSuccessListener { /* ready */ }
-            .addOnFailureListener { overlay.updateText("Translator init failed") }
+        Intent(this, TranslatorService::class.java).also { intent ->
+            bindService(intent, conn, BIND_AUTO_CREATE)
+        }
     }
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
@@ -65,7 +77,7 @@ class AudioCaptureService : Service() {
         startForeground(1, createNotification())
 
         val resultCode = intent?.getIntExtra("code", -1) ?: return START_NOT_STICKY
-        val data       = intent.getParcelableExtra<Intent>("data") ?: return START_NOT_STICKY
+        val data = intent.getParcelableExtra<Intent>("data") ?: return START_NOT_STICKY
         mediaProjection = getSystemService(MediaProjectionManager::class.java)
             .getMediaProjection(resultCode, data)!!
 
@@ -109,37 +121,45 @@ class AudioCaptureService : Service() {
         }
 
         try {
-            overlay.updateText("Initializing online streaming model…")
+            val config = OfflinePunctuationConfig(
+                model = OfflinePunctuationModelConfig(
+                    ctTransformer = "sherpa/punct-model.onnx",
+                    numThreads = 1,
+                    debug = false,
+                    provider = "cpu",
+                )
+            )
+            punct = OfflinePunctuation(am, config = config)
 
             val transducerCfg = OnlineTransducerModelConfig(
                 encoder = "sherpa/encoder.onnx",
                 decoder = "sherpa/decoder.onnx",
-                joiner  = "sherpa/joiner.onnx"
+                joiner = "sherpa/joiner.onnx"
             )
             val modelCfg = OnlineModelConfig(
                 transducer = transducerCfg,
                 paraformer = OnlineParaformerModelConfig(),
-                tokens     = "sherpa/tokens.txt",
+                tokens = "sherpa/tokens.txt",
                 numThreads = 2,
-                debug      = false,
-                provider   = "cpu",
-                modelType  = ""
+                debug = false,
+                provider = "cpu",
+                modelType = ""
             )
             val lmCfg = OnlineLMConfig(model = "", scale = 0.5f)
             val epRules = EndpointConfig(
                 EndpointRule(false, 2.4f, 0f),
-                EndpointRule(true,  1.2f, 0f),
-                EndpointRule(false, 0f,   20f)
+                EndpointRule(true, 1.2f, 0f),
+                EndpointRule(false, 0f, 20f)
             )
             val onlineCfg = OnlineRecognizerConfig(
-                featConfig     = FeatureConfig(sampleRate, 80),
-                modelConfig    = modelCfg,
-                lmConfig       = lmCfg,
+                featConfig = FeatureConfig(sampleRate, 80),
+                modelConfig = modelCfg,
+                lmConfig = lmCfg,
                 endpointConfig = epRules,
                 enableEndpoint = true,
                 maxActivePaths = 4,
                 decodingMethod = "greedy_search",
-                blankPenalty   = 0f
+                blankPenalty = 0f
             )
 
             recognizer = OnlineRecognizer(am, onlineCfg)
@@ -154,88 +174,100 @@ class AudioCaptureService : Service() {
 
     private fun processAudioStreaming(sampleRate: Int) {
         val stream = recognizer.createStream()
-
-        val interval = 0.1 // i.e., 100 ms
-        val bufferSize = (interval * sampleRate).toInt() // in samples
+        val intervalSecs = 1.4
+        val bufferSize = (intervalSecs * sampleRate).toInt()
         val buffer = ShortArray(bufferSize)
+
+        // ← holds "end" indexes (exclusive) of each sentence we've seen
+        val sentenceBoundaries = mutableListOf<Int>()
+        // ← avoid rescanning old text
+        var lastProcessedIndex = 0
+        // matches any punctuation char
+        val sentenceEnd = Regex("[\\p{Punct}]")
 
         while (running && recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
             val bytesRead = recorder.read(buffer, 0, buffer.size)
             if (bytesRead > 0) {
+                // feed audio
                 val samples = FloatArray(bytesRead) { buffer[it] / 32768.0f }
                 stream.acceptWaveform(samples, sampleRate)
                 while (recognizer.isReady(stream)) recognizer.decode(stream)
 
+                // on endpoint, tack on a bit of silence to flush
                 val isEndpoint = recognizer.isEndpoint(stream)
-                var text = recognizer.getResult(stream).text
-
+                var rawText = recognizer.getResult(stream).text
                 if (isEndpoint && recognizer.config.modelConfig.paraformer.encoder.isNotBlank()) {
                     val tail = FloatArray((0.8 * sampleRate).toInt())
                     stream.acceptWaveform(tail, sampleRate)
                     while (recognizer.isReady(stream)) recognizer.decode(stream)
-                    text = recognizer.getResult(stream).text
+                    rawText = recognizer.getResult(stream).text
                 }
 
-                val displayText = "$lastText$text".takeLast(500)
+                if (rawText.isNotBlank()) {
+                    // add punctuation predictions
+                    val punctuated = punct.addPunctuation(rawText)
 
-                if (isEndpoint) {
-                    recognizer.reset(stream)
-                    lastText = displayText
+                    // scan only new chars for punctuation
+                    for (i in lastProcessedIndex until punctuated.length) {
+                        if (sentenceEnd.matches(punctuated[i].toString())) {
+                            // record the boundary just *after* this punctuation
+                            val boundaryPos = i + 1
+                            sentenceBoundaries.add(boundaryPos)
+                            lastProcessedIndex = boundaryPos
+
+                            // decide where our two‑sentence window starts:
+                            // if we've seen ≥3 sentences, start at boundary[n-3],
+                            // else start at 0
+                            val startIndex = if (sentenceBoundaries.size >= 3) {
+                                sentenceBoundaries[sentenceBoundaries.size - 3]
+                            } else {
+                                0
+                            }
+                            val endIndex = boundaryPos
+
+                            // extract exactly the previous + current sentence
+                            val window = punctuated
+                                .substring(startIndex, endIndex)
+                                .trim()
+
+                            if (window.isEmpty()) continue
+
+                            // now translate or display the two-sentence block
+                            if (containsChinese(window)) {
+                                translatorService?.translateText(window) { translated ->
+                                    overlay.updateText(addSpaceAfterPunctuation(translated!!))
+                                    Log.i(TAG, "Translated 2-sentence window: $translated")
+                                }
+                            } else {
+                                overlay.updateText(addSpaceAfterPunctuation(window))
+                                Log.i(TAG, "Displayed 2-sentence window: $window")
+                            }
+
+                            // if it's a hard endpoint, reset recognizer state
+                            if (isEndpoint) {
+                                recognizer.reset(stream)
+                                sentenceBoundaries.clear()
+                                lastProcessedIndex = 0
+                            }
+                        }
+                    }
                 }
-
-                Log.i(TAG, "Recognized: $text")
-                runOnMain { overlay.updateText(displayText) }
-
-//                if (displayText != lastDisplay) {
-//                    val now = SystemClock.elapsedRealtime()
-//                    if (now - lastTranslationTimeMs >= TRANSLATION_INTERVAL_MS) {
-//                        lastTranslationTimeMs = now
-//
-//                        // Extract last sentence
-//                        val parts = displayText.split(Regex("(?<=[。！？?.!])\\s*"))
-//                        val prefix = parts.dropLast(1).joinToString("")
-//                        val lastSentence = parts.last().trim()
-//
-//                        val containsChinese = lastSentence.any { ch -> ch.code in 0x4E00..0x9FFF }
-//                        if (containsChinese) {
-//                            translator.translate(lastSentence)
-//                                .addOnSuccessListener { translated ->
-//                                    runOnMain { overlay.updateText(prefix + translated) }
-//                                }
-//                                .addOnFailureListener {
-//                                    runOnMain { overlay.updateText(displayText) }
-//                                }
-//                        } else {
-//                            runOnMain { overlay.updateText(displayText) }
-//                        }
-//                    }
-//                }
             }
+
             Thread.sleep(20)
         }
+
         stream.release()
-    }
-
-    private fun convertBytesToFloat(buffer: ByteArray, bytesRead: Int): FloatArray {
-        val sampleCount = bytesRead / 2
-        val floats = FloatArray(sampleCount)
-        val bb = ByteBuffer.wrap(buffer, 0, bytesRead).order(ByteOrder.LITTLE_ENDIAN)
-
-        for (i in 0 until sampleCount) {
-            val sample = bb.short.toInt()
-            floats[i] = sample / 32768.0f
-        }
-
-        return floats
-    }
-
-    private fun runOnMain(block: () -> Unit) {
-        Handler(Looper.getMainLooper()).post(block)
     }
 
     override fun onDestroy() {
         super.onDestroy()
         running = false
+
+        if (isBound) {
+            unbindService(conn)
+            isBound = false
+        }
     }
 
     override fun onBind(intent: Intent?) = null
@@ -251,5 +283,18 @@ class AudioCaptureService : Service() {
             .setContentText("Transcribing device audio…")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .build()
+    }
+
+    fun containsChinese(input: String): Boolean {
+        return input.any {
+            Character.UnicodeScript.of(it.code) == Character.UnicodeScript.HAN
+        }
+    }
+
+    fun addSpaceAfterPunctuation(input: String): String {
+        val regex = Regex("""([\p{Punct}&&[^']])(?!\s)""")
+        return input.replace(regex) { match ->
+            "${match.value} "
+        }
     }
 }

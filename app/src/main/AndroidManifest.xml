@@ -34,5 +34,9 @@
             android:name=".AudioCaptureService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+
+        <service
+            android:name=".TranslatorService"
+            android:exported="false" />
     </application>
 </manifest>

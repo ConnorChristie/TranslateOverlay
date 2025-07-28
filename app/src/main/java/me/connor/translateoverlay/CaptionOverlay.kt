@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.res.Resources
 import android.graphics.Color
 import android.graphics.Paint
+import android.os.Handler
+import android.os.Looper
 import android.text.TextPaint
 import android.util.AttributeSet
 import android.view.Gravity
@@ -31,7 +33,7 @@ class CaptionOverlay @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
     defStyleAttr: Int = 0,
-    private val maxVisibleLines: Int = 3,
+    private val maxVisibleLines: Int = 4,
     private val anchorChars: Int = 32,        // ≈ 5–6 English words
     private val ringCapacity: Int = 512       // how many *completed* lines we keep
 ) : FrameLayout(context, attrs, defStyleAttr) {
@@ -74,10 +76,17 @@ class CaptionOverlay @JvmOverloads constructor(
      * Feed a *full* transcript string exactly as supplied by the ASR engine.
      * The overlay will figure out what changed and update itself smoothly.
      */
-    fun updateTranscript(full: String) {
-        val delta = extractDelta(full)
-        wrapAndPush(delta)
-        redraw()
+    fun updateTranscript(full: String, replace: Boolean = false) {
+        if (replace) {
+            runOnMain {
+                reset()
+                tv.text = full
+            }
+        } else {
+            val delta = extractDelta(full)
+            wrapAndPush(delta)
+            redraw()
+        }
     }
 
     /** Clears history (e.g. when ASR engine resets). */
@@ -150,14 +159,15 @@ class CaptionOverlay @JvmOverloads constructor(
     /** Rebuilds the overlay from the ring *plus* the still‑growing current line. */
     private fun redraw() {
         val lines = ArrayList<String>(maxVisibleLines)
-
-        // ➊ completed lines (oldest → newest)
         lines += ring.takeLast(maxVisibleLines - 1)
 
-        // ➋ current unfinished line (if any)
         if (currentLine.isNotBlank()) lines += currentLine.toString()
 
         // keep at most 3 lines visible
-        tv.text = lines.takeLast(maxVisibleLines).joinToString("\n")
+        runOnMain { tv.text = lines.takeLast(maxVisibleLines).joinToString("\n") }
+    }
+
+    private fun runOnMain(block: () -> Unit) {
+        Handler(Looper.getMainLooper()).post(block)
     }
 }

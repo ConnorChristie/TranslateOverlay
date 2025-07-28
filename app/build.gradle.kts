@@ -50,8 +50,8 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     implementation(libs.androidx.appcompat)
-    implementation(libs.lib.sherpa.onnx)
     implementation(libs.translate)
+    implementation(files("libs/sherpa-onnx-1.12.7.aar"))
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

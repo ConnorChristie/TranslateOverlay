@@ -16,6 +16,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var accessibilityStatus: TextView
     private lateinit var requestOverlayBtn: Button
     private lateinit var requestAccessibilityBtn: Button
+    private lateinit var overlay: FloatingOverlay
 
     private val REQUEST_MEDIA_PROJECTION = 42
     private lateinit var mediaProjectionManager: MediaProjectionManager
@@ -24,6 +25,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        overlay = FloatingOverlay(this)
         overlayStatus = findViewById(R.id.overlayStatus)
         accessibilityStatus = findViewById(R.id.accessibilityStatus)
         requestOverlayBtn = findViewById(R.id.requestOverlayBtn)
@@ -52,6 +54,10 @@ class MainActivity : AppCompatActivity() {
                 mediaProjectionManager.createScreenCaptureIntent(),
                 REQUEST_MEDIA_PROJECTION
             )
+        }
+
+        findViewById<Button>(R.id.showOverlayBtn).setOnClickListener {
+            overlay.show(true)
         }
     }
 
