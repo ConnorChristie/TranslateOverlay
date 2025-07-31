@@ -10,23 +10,46 @@ import android.provider.Settings
 import android.widget.ArrayAdapter
 import android.widget.TextView
 import android.widget.AdapterView
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
+import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.mlkit.nl.translate.TranslateLanguage
 
 class MainActivity : AppCompatActivity() {
     private lateinit var overlayStatus: TextView
     private lateinit var accessibilityStatus: TextView
+    private lateinit var openAIStatus: TextView
     private lateinit var requestOverlayBtn: MaterialButton
     private lateinit var requestAccessibilityBtn: MaterialButton
     private lateinit var overlay: FloatingOverlay
     private lateinit var sourceLanguageSpinner: MaterialAutoCompleteTextView
+    private lateinit var targetLanguageSpinner: MaterialAutoCompleteTextView
+    private lateinit var useOpenAISwitch: SwitchMaterial
     private lateinit var sharedPreferences: SharedPreferences
+    private lateinit var openAIConfigManager: OpenAIConfigManager
 
-    private val REQUEST_MEDIA_PROJECTION = 42
     private lateinit var mediaProjectionManager: MediaProjectionManager
+
+    private val startActivityForResult = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK && result.data != null) {
+            val svc = Intent(this, AudioCaptureService::class.java).apply {
+                putExtra("code", result.resultCode)
+                putExtra("data", result.data)
+                putExtra("sourceLanguage", sharedPreferences.getString(PREF_SOURCE_LANG, DEFAULT_SOURCE_LANG))
+                putExtra("targetLanguage", openAIConfigManager.getTargetLanguage())
+                putExtra("useOpenAI", openAIConfigManager.getUseOpenAI())
+                putExtra("openAIApiKey", openAIConfigManager.getApiKey())
+                putExtra("openAIModel", openAIConfigManager.getModel())
+                putExtra("openAITemperature", openAIConfigManager.getTemperature())
+            }
+            ContextCompat.startForegroundService(this, svc)
+        }
+    }
 
     companion object {
         private const val PREFS_NAME = "TranslateOverlayPrefs"
@@ -36,7 +59,25 @@ class MainActivity : AppCompatActivity() {
         // Available source languages
         private val SOURCE_LANGUAGES = listOf(
             Language("zh", "Chinese (中文)"),
-            Language("ko", "Korean (한국어)")
+            Language("ko", "Korean (한국어)"),
+            Language("en", "English"),
+            Language("es", "Spanish (Español)"),
+            Language("fr", "French (Français)"),
+            Language("de", "German (Deutsch)"),
+            Language("ja", "Japanese (日本語)"),
+            Language("ru", "Russian (Русский)")
+        )
+
+        // Available target languages
+        private val TARGET_LANGUAGES = listOf(
+            Language("en", "English"),
+            Language("zh", "Chinese (中文)"),
+            Language("ko", "Korean (한국어)"),
+            Language("es", "Spanish (Español)"),
+            Language("fr", "French (Français)"),
+            Language("de", "German (Deutsch)"),
+            Language("ja", "Japanese (日本語)"),
+            Language("ru", "Russian (Русский)")
         )
     }
 
@@ -46,15 +87,20 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         sharedPreferences = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        openAIConfigManager = OpenAIConfigManager(this)
 
         overlay = FloatingOverlay(this)
         overlayStatus = findViewById(R.id.overlayStatus)
         accessibilityStatus = findViewById(R.id.accessibilityStatus)
+        openAIStatus = findViewById(R.id.openAIStatus)
         requestOverlayBtn = findViewById(R.id.requestOverlayBtn)
         requestAccessibilityBtn = findViewById(R.id.requestAccessibilityBtn)
         sourceLanguageSpinner = findViewById(R.id.sourceLanguageSpinner)
+        targetLanguageSpinner = findViewById(R.id.targetLanguageSpinner)
+        useOpenAISwitch = findViewById(R.id.useOpenAISwitch)
 
-        setupLanguageSpinner()
+        setupLanguageSpinners()
+        setupOpenAIConfiguration()
 
         requestOverlayBtn.setOnClickListener {
             startActivity(
@@ -73,9 +119,8 @@ class MainActivity : AppCompatActivity() {
             mediaProjectionManager = getSystemService(
                 Context.MEDIA_PROJECTION_SERVICE
             ) as MediaProjectionManager
-            startActivityForResult(
-                mediaProjectionManager.createScreenCaptureIntent(),
-                REQUEST_MEDIA_PROJECTION
+            startActivityForResult.launch(
+                mediaProjectionManager.createScreenCaptureIntent()
             )
         }
 
@@ -84,14 +129,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun setupLanguageSpinner() {
-        val adapter = ArrayAdapter(
+    private fun setupLanguageSpinners() {
+        // Source language spinner
+        val sourceAdapter = ArrayAdapter(
             this,
             android.R.layout.simple_dropdown_item_1line,
             SOURCE_LANGUAGES.map { it.displayName }
         )
-
-        sourceLanguageSpinner.setAdapter(adapter)
+        sourceLanguageSpinner.setAdapter(sourceAdapter)
 
         // Set saved or default selection
         val savedSourceLang = sharedPreferences.getString(PREF_SOURCE_LANG, DEFAULT_SOURCE_LANG)
@@ -108,12 +153,64 @@ class MainActivity : AppCompatActivity() {
                 .putString(PREF_SOURCE_LANG, selectedLanguage)
                 .apply()
         }
+
+        // Target language spinner
+        val targetAdapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_dropdown_item_1line,
+            TARGET_LANGUAGES.map { it.displayName }
+        )
+        targetLanguageSpinner.setAdapter(targetAdapter)
+
+        // Set saved or default selection
+        val savedTargetLang = openAIConfigManager.getTargetLanguage()
+        val targetIndex = TARGET_LANGUAGES.indexOfFirst { it.code == savedTargetLang }
+        if (targetIndex >= 0) {
+            targetLanguageSpinner.setText(TARGET_LANGUAGES[targetIndex].displayName, false)
+            targetLanguageSpinner.listSelection = targetIndex
+        }
+
+        // Save selection when changed
+        targetLanguageSpinner.setOnItemClickListener { parent, _, position, _ ->
+            val selectedLanguage = TARGET_LANGUAGES[position].code
+            openAIConfigManager.setTargetLanguage(selectedLanguage)
+        }
+    }
+
+    private fun setupOpenAIConfiguration() {
+        // Set initial switch state
+        useOpenAISwitch.isChecked = openAIConfigManager.getUseOpenAI()
+
+        // Handle switch changes
+        useOpenAISwitch.setOnCheckedChangeListener { _, isChecked ->
+            openAIConfigManager.setUseOpenAI(isChecked)
+            updateOpenAIStatus()
+        }
+
+        updateOpenAIStatus()
+    }
+
+    private fun updateOpenAIStatus() {
+        val useOpenAI = openAIConfigManager.getUseOpenAI()
+        val hasValidKey = openAIConfigManager.hasValidApiKey()
+        val apiKey = openAIConfigManager.getApiKey()
+        
+        val status = when {
+            !useOpenAI -> "OpenAI API: Disabled"
+            apiKey == null -> "OpenAI API: No API key configured ❌\nCreate local_config.properties file"
+            apiKey == "YOUR_OPENAI_API_KEY_HERE" -> "OpenAI API: Please replace placeholder with your API key ❌"
+            !hasValidKey -> "OpenAI API: Invalid API key format ❌\nKey should start with 'sk-'"
+            else -> "OpenAI API: Configured ✅"
+        }
+        
+        openAIStatus.text = status
     }
 
     override fun onResume() {
         super.onResume()
         updateOverlayStatus()
         updateAccessibilityStatus()
+        updateOpenAIStatus()
     }
 
     private fun updateOverlayStatus() {
@@ -140,19 +237,6 @@ class MainActivity : AppCompatActivity() {
 
         accessibilityStatus.text = "Accessibility service: " +
                 if (accEnabled) "ENABLED ✅" else "NOT ENABLED ❌"
-    }
-
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == REQUEST_MEDIA_PROJECTION && resultCode == RESULT_OK && data != null) {
-            val svc = Intent(this, AudioCaptureService::class.java).apply {
-                putExtra("code", resultCode)
-                putExtra("data", data)
-                putExtra("sourceLanguage", sharedPreferences.getString(PREF_SOURCE_LANG, DEFAULT_SOURCE_LANG))
-                putExtra("targetLanguage", "en")  // Always English
-            }
-            ContextCompat.startForegroundService(this, svc)
-        }
     }
 
     private data class Language(val code: String, val displayName: String)

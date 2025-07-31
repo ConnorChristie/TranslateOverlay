@@ -17,3 +17,15 @@ local.properties
 *.so
 *.aar
 gradle-wrapper.jar
+
+# Sensitive configuration files
+app/src/main/assets/config.properties
+app/src/main/assets/openai_config.properties
+app/src/main/assets/secrets.properties
+*.keystore
+*.jks
+
+# Local configuration
+local_config.properties
+secrets.properties
+openai_config.properties

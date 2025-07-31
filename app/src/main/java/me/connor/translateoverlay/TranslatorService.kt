@@ -28,7 +28,7 @@ class TranslatorService : Service() {
 
     // ML Kit translator
     private lateinit var translator: Translator
-    private var sourceLanguage: String = "en"
+    private var sourceLanguage: String = "zh"
     private val targetLanguage: String = "en"  // Always English
 
     // Language change receiver

@@ -26,6 +26,11 @@ import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.Translator
 import com.google.mlkit.nl.translate.TranslatorOptions
 import com.k2fsa.sherpa.onnx.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.Executors
@@ -42,13 +47,23 @@ class AudioCaptureService : Service() {
     private lateinit var overlay: FloatingOverlay
     private lateinit var recorder: AudioRecord
     private lateinit var mediaProjection: MediaProjection
-    private lateinit var recognizer: OnlineRecognizer
-    private lateinit var punct: OfflinePunctuation
     private val executor = Executors.newSingleThreadExecutor()
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var running = true
     private var lastText = ""
     private var sourceLanguage = "zh"
     private var targetLanguage = "en"
+
+    // Sherpa components
+    private var recognizer: OnlineRecognizer? = null
+    private var punct: OfflinePunctuation? = null
+
+    // OpenAI components
+    private var openAIService: OpenAIRealtimeService? = null
+    private var useOpenAI = false
+    private var openAIApiKey: String? = null
+    private var openAIModel: String = "whisper-1"
+    private var openAITemperature: Float = 0.0f
 
     private var translatorService: TranslatorService? = null
     private var isBound = false
@@ -96,11 +111,18 @@ class AudioCaptureService : Service() {
         startForeground(1, createNotification())
 
         val resultCode = intent?.getIntExtra("code", -1) ?: return START_NOT_STICKY
+        @Suppress("DEPRECATION")
         val data = intent.getParcelableExtra<Intent>("data") ?: return START_NOT_STICKY
         
         // Get language settings
         sourceLanguage = intent.getStringExtra("sourceLanguage") ?: sourceLanguage
         targetLanguage = intent.getStringExtra("targetLanguage") ?: targetLanguage
+
+        // Get OpenAI settings
+        useOpenAI = intent.getBooleanExtra("useOpenAI", false)
+        openAIApiKey = intent.getStringExtra("openAIApiKey")
+        openAIModel = intent.getStringExtra("openAIModel") ?: "whisper-1"
+        openAITemperature = intent.getFloatExtra("openAITemperature", 0.0f)
 
         // Pass language settings to translator service
         Intent(this, TranslatorService::class.java).also { translatorIntent ->
@@ -135,8 +157,84 @@ class AudioCaptureService : Service() {
             .setAudioPlaybackCaptureConfig(config)
             .build()
 
-        initSherpa(sampleRate)
+        if (useOpenAI && !openAIApiKey.isNullOrBlank()) {
+            initOpenAI(sampleRate)
+        } else {
+            initSherpa(sampleRate)
+        }
+        
         return START_STICKY
+    }
+
+    private fun initOpenAI(sampleRate: Int) {
+        try {
+            openAIService = OpenAIRealtimeService()
+            
+            val config = OpenAIRealtimeService.TranscriptionConfig(
+                apiKey = openAIApiKey!!,
+                model = openAIModel,
+                language = sourceLanguage,
+                temperature = openAITemperature.toDouble()
+            )
+
+            scope.launch {
+                openAIService!!.connectForTranscription(
+                    config = config,
+                    onTranscription = { transcription ->
+                        if (transcription.isNotBlank()) {
+                            if (sourceLanguage != targetLanguage) {
+                                // Use ML Kit translation service since OpenAI transcription sessions don't support translation
+                                translatorService?.translateText(transcription) { translated ->
+                                    overlay.updateText(addSpaceAfterPunctuation(translated!!))
+                                    Log.i(TAG, "OpenAI transcription + ML Kit translation: $transcription -> $translated")
+                                }
+                            } else {
+                                overlay.updateText(addSpaceAfterPunctuation(transcription))
+                                Log.i(TAG, "OpenAI transcription: $transcription")
+                            }
+                        }
+                    },
+                    onError = { error ->
+                        overlay.updateText("OpenAI Error: $error")
+                        Log.e(TAG, "OpenAI error: $error")
+                    },
+                    onConnectionStatus = { connected ->
+                        overlay.updateText(if (connected) "OpenAI Connected" else "OpenAI Disconnected")
+                        Log.i(TAG, "OpenAI connection status: $connected")
+                    }
+                )
+            }
+
+            recorder.startRecording()
+            overlay.updateText("OpenAI Listening…")
+            executor.execute { processAudioWithOpenAI(sampleRate) }
+            
+        } catch (e: Exception) {
+            overlay.updateText("OpenAI initialization error: ${e.message}")
+            Log.e(TAG, "OpenAI initialization error", e)
+            // Fall back to Sherpa
+            initSherpa(sampleRate)
+        }
+    }
+
+    private fun processAudioWithOpenAI(sampleRate: Int) {
+        val buffer = ShortArray(1024)
+        
+        while (running && recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+            val bytesRead = recorder.read(buffer, 0, buffer.size)
+            if (bytesRead > 0) {
+                // Convert to byte array and send to OpenAI
+                val byteBuffer = ByteBuffer.allocate(bytesRead * 2)
+                byteBuffer.order(ByteOrder.LITTLE_ENDIAN)
+                for (i in 0 until bytesRead) {
+                    byteBuffer.putShort(buffer[i])
+                }
+                
+                openAIService?.sendAudioChunk(byteBuffer.array())
+            }
+            
+            Thread.sleep(20)
+        }
     }
 
     private fun initSherpa(sampleRate: Int) {
@@ -195,16 +293,16 @@ class AudioCaptureService : Service() {
 
             recognizer = OnlineRecognizer(am, onlineCfg)
             recorder.startRecording()
-            overlay.updateText("Listening…")
+            overlay.updateText("Sherpa Listening…")
             executor.execute { processAudioStreaming(sampleRate) }
         } catch (e: Exception) {
-            overlay.updateText("Initialization error: ${e.message}")
+            overlay.updateText("Sherpa initialization error: ${e.message}")
             e.printStackTrace()
         }
     }
 
     private fun processAudioStreaming(sampleRate: Int) {
-        val stream = recognizer.createStream()
+        val stream = recognizer?.createStream() ?: return
         val intervalSecs = 1.4
         val bufferSize = (intervalSecs * sampleRate).toInt()
         val buffer = ShortArray(bufferSize)
@@ -222,21 +320,21 @@ class AudioCaptureService : Service() {
                 // feed audio
                 val samples = FloatArray(bytesRead) { buffer[it] / 32768.0f }
                 stream.acceptWaveform(samples, sampleRate)
-                while (recognizer.isReady(stream)) recognizer.decode(stream)
+                while (recognizer?.isReady(stream) == true) recognizer?.decode(stream)
 
                 // on endpoint, tack on a bit of silence to flush
-                val isEndpoint = recognizer.isEndpoint(stream)
-                var rawText = recognizer.getResult(stream).text
-                if (isEndpoint && recognizer.config.modelConfig.paraformer.encoder.isNotBlank()) {
+                val isEndpoint = recognizer?.isEndpoint(stream) == true
+                var rawText = recognizer?.getResult(stream)?.text ?: ""
+                if (isEndpoint && recognizer?.config?.modelConfig?.paraformer?.encoder?.isNotBlank() == true) {
                     val tail = FloatArray((0.8 * sampleRate).toInt())
                     stream.acceptWaveform(tail, sampleRate)
-                    while (recognizer.isReady(stream)) recognizer.decode(stream)
-                    rawText = recognizer.getResult(stream).text
+                    while (recognizer?.isReady(stream) == true) recognizer?.decode(stream)
+                    rawText = recognizer?.getResult(stream)?.text ?: ""
                 }
 
                 if (rawText.isNotBlank()) {
                     // add punctuation predictions
-                    val punctuated = punct.addPunctuation(rawText)
+                    val punctuated = punct?.addPunctuation(rawText) ?: rawText
 
                     // scan only new chars for punctuation
                     for (i in lastProcessedIndex until punctuated.length) {
@@ -265,7 +363,7 @@ class AudioCaptureService : Service() {
 
                             // now translate or display the two-sentence block
                             // Always translate if source language is not English
-                            if (sourceLanguage != "en") {
+                            if (sourceLanguage != targetLanguage) {
                                 translatorService?.translateText(window) { translated ->
                                     overlay.updateText(addSpaceAfterPunctuation(translated!!))
                                     Log.i(TAG, "Translated text: $translated")
@@ -277,7 +375,7 @@ class AudioCaptureService : Service() {
 
                             // if it's a hard endpoint, reset recognizer state
                             if (isEndpoint) {
-                                recognizer.reset(stream)
+                                recognizer?.reset(stream)
                                 sentenceBoundaries.clear()
                                 lastProcessedIndex = 0
                             }
@@ -313,13 +411,17 @@ class AudioCaptureService : Service() {
         // Stop the translator service
         stopService(Intent(this, TranslatorService::class.java))
         
+        // Clean up OpenAI service
+        openAIService?.cleanup()
+        
         // Clean up resources
         mediaProjection.stop()
         recorder.stop()
         recorder.release()
-        recognizer.release()
-        punct.release()
+        recognizer?.release()
+        punct?.release()
         executor.shutdown()
+        scope.cancel()
     }
 
     override fun onBind(intent: Intent?) = null
@@ -331,7 +433,7 @@ class AudioCaptureService : Service() {
             NotificationChannel(channelId, "Sherpa-ASR Overlay", NotificationManager.IMPORTANCE_LOW)
         )
         return NotificationCompat.Builder(this, channelId)
-            .setContentTitle("Sherpa-ASR Service")
+            .setContentTitle(if (useOpenAI) "OpenAI Realtime Service" else "Sherpa-ASR Service")
             .setContentText("Transcribing device audio…")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .build()
