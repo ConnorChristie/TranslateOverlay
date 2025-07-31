@@ -5,9 +5,11 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.ServiceConnection
 import android.media.AudioAttributes
 import android.media.AudioFormat
@@ -45,9 +47,19 @@ class AudioCaptureService : Service() {
     private val executor = Executors.newSingleThreadExecutor()
     private var running = true
     private var lastText = ""
+    private var sourceLanguage = "zh"
+    private var targetLanguage = "en"
 
     private var translatorService: TranslatorService? = null
     private var isBound = false
+
+    private val stopServiceReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == FloatingOverlay.ACTION_STOP_SERVICES) {
+                stopSelf()
+            }
+        }
+    }
 
     private val conn = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, service: IBinder) {
@@ -67,6 +79,13 @@ class AudioCaptureService : Service() {
         overlay = FloatingOverlay(this)
         overlay.show(false)
 
+        // Register for stop service broadcasts
+        registerReceiver(
+            stopServiceReceiver,
+            IntentFilter(FloatingOverlay.ACTION_STOP_SERVICES),
+            RECEIVER_NOT_EXPORTED
+        )
+
         Intent(this, TranslatorService::class.java).also { intent ->
             bindService(intent, conn, BIND_AUTO_CREATE)
         }
@@ -78,6 +97,18 @@ class AudioCaptureService : Service() {
 
         val resultCode = intent?.getIntExtra("code", -1) ?: return START_NOT_STICKY
         val data = intent.getParcelableExtra<Intent>("data") ?: return START_NOT_STICKY
+        
+        // Get language settings
+        sourceLanguage = intent.getStringExtra("sourceLanguage") ?: sourceLanguage
+        targetLanguage = intent.getStringExtra("targetLanguage") ?: targetLanguage
+
+        // Pass language settings to translator service
+        Intent(this, TranslatorService::class.java).also { translatorIntent ->
+            translatorIntent.putExtra("sourceLanguage", sourceLanguage)
+            translatorIntent.putExtra("targetLanguage", targetLanguage)
+            startService(translatorIntent)
+        }
+
         mediaProjection = getSystemService(MediaProjectionManager::class.java)
             .getMediaProjection(resultCode, data)!!
 
@@ -233,14 +264,15 @@ class AudioCaptureService : Service() {
                             if (window.isEmpty()) continue
 
                             // now translate or display the two-sentence block
-                            if (containsChinese(window)) {
+                            // Always translate if source language is not English
+                            if (sourceLanguage != "en") {
                                 translatorService?.translateText(window) { translated ->
                                     overlay.updateText(addSpaceAfterPunctuation(translated!!))
-                                    Log.i(TAG, "Translated 2-sentence window: $translated")
+                                    Log.i(TAG, "Translated text: $translated")
                                 }
                             } else {
                                 overlay.updateText(addSpaceAfterPunctuation(window))
-                                Log.i(TAG, "Displayed 2-sentence window: $window")
+                                Log.i(TAG, "Displayed text: $window")
                             }
 
                             // if it's a hard endpoint, reset recognizer state
@@ -268,6 +300,26 @@ class AudioCaptureService : Service() {
             unbindService(conn)
             isBound = false
         }
+
+        try {
+            unregisterReceiver(stopServiceReceiver)
+        } catch (e: IllegalArgumentException) {
+            // Receiver not registered
+        }
+
+        // Remove the overlay and unregister its receivers
+        overlay.remove()
+
+        // Stop the translator service
+        stopService(Intent(this, TranslatorService::class.java))
+        
+        // Clean up resources
+        mediaProjection.stop()
+        recorder.stop()
+        recorder.release()
+        recognizer.release()
+        punct.release()
+        executor.shutdown()
     }
 
     override fun onBind(intent: Intent?) = null
@@ -283,12 +335,6 @@ class AudioCaptureService : Service() {
             .setContentText("Transcribing device audio…")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .build()
-    }
-
-    fun containsChinese(input: String): Boolean {
-        return input.any {
-            Character.UnicodeScript.of(it.code) == Character.UnicodeScript.HAN
-        }
     }
 
     fun addSpaceAfterPunctuation(input: String): String {

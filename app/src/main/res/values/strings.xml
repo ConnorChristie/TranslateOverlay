@@ -1,3 +1,15 @@
 <resources>
     <string name="app_name">TranslateOverlay</string>
+    <string-array name="language_names">
+        <item>English</item>
+        <item>Spanish</item>
+        <item>Chinese (Simplified)</item>
+        <item>French</item>
+    </string-array>
+    <string-array name="language_codes">
+        <item>en</item>
+        <item>es</item>
+        <item>zh</item>
+        <item>fr</item>
+    </string-array>
 </resources>

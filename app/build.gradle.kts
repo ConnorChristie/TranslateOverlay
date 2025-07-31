@@ -40,7 +40,6 @@ android {
 }
 
 dependencies {
-
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
@@ -52,6 +51,7 @@ dependencies {
     implementation(libs.androidx.appcompat)
     implementation(libs.translate)
     implementation(files("libs/sherpa-onnx-1.12.7.aar"))
+    implementation("com.google.android.material:material:1.11.0")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

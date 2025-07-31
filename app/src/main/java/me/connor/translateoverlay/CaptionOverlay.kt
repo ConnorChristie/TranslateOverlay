@@ -1,6 +1,7 @@
 package me.connor.translateoverlay
 
 import android.content.Context
+import android.content.Intent
 import android.content.res.Resources
 import android.graphics.Color
 import android.graphics.Paint
@@ -9,8 +10,9 @@ import android.os.Looper
 import android.text.TextPaint
 import android.util.AttributeSet
 import android.view.Gravity
-import android.widget.FrameLayout
-import android.widget.TextView
+import android.view.MotionEvent
+import android.view.View
+import android.widget.*
 import androidx.core.content.ContextCompat
 import kotlin.math.min
 
@@ -38,10 +40,10 @@ class CaptionOverlay @JvmOverloads constructor(
     private val ringCapacity: Int = 512       // how many *completed* lines we keep
 ) : FrameLayout(context, attrs, defStyleAttr) {
 
-    /** Buffer that stores completed *lines* (not raw chars). Constant‑time growth/trim. */
+    /** Buffer that stores completed *lines* (not constant‑time growth/trim). */
     private val ring = ArrayDeque<String>(ringCapacity)
 
-    /** Holds the line we’re still building; NOT yet pushed to [ring]. */
+    /** Holds the line we're still building; NOT yet pushed to [ring]. */
     private val currentLine = StringBuilder()
 
     /** Paint used solely to measure text width for word‑wrapping. */
@@ -56,16 +58,135 @@ class CaptionOverlay @JvmOverloads constructor(
         setLineSpacing(2f, 1f)
         setTextIsSelectable(false)
         setTextColor(Color.WHITE)
+        setPadding(0, 0, 0, 8.dp) // Add bottom padding for controls
+    }
+
+    /** Control bar containing language spinner and close button */
+    private val controlBar = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(4.dp, 4.dp, 4.dp, 4.dp)
+        visibility = View.GONE // Initially hidden
+        setBackgroundColor(Color.parseColor("#33000000")) // Semi-transparent background
+    }
+
+    /** Language selection spinner */
+    private val languageSpinner = Spinner(context).apply {
+        val adapter = ArrayAdapter.createFromResource(
+            context,
+            R.array.language_names,
+            android.R.layout.simple_spinner_item
+        ).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+        this.adapter = adapter
+        
+        onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val languageCodes = resources.getStringArray(R.array.language_codes)
+                // Broadcast language change
+                context.sendBroadcast(
+                    Intent("me.connor.translateoverlay.ACTION_LANGUAGE_CHANGED")
+                        .putExtra("language_code", languageCodes[position])
+                        .setPackage(context.packageName)
+                )
+                // Keep controls visible while interacting
+                resetAutoHide()
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+    }
+
+    /** Close button with trash can icon */
+    private val closeButton = ImageButton(context).apply {
+        setImageResource(android.R.drawable.ic_menu_delete)
+        background = null
+        setPadding(8.dp, 8.dp, 8.dp, 8.dp)
+        setOnClickListener {
+            // Stop all services and remove overlay
+            context.sendBroadcast(
+                Intent(FloatingOverlay.ACTION_STOP_SERVICES)
+                    .setPackage(context.packageName)
+            )
+        }
     }
 
     /** Running *full* transcript received from the ASR engine last time we updated. */
     private var prev: String = ""
 
+    /** Handler for auto-hiding controls */
+    private val hideHandler = Handler(Looper.getMainLooper())
+    private val hideRunnable = Runnable { hideControls() }
+    private val AUTO_HIDE_DELAY = 3000L // 3 seconds
+
     init {
-        addView(tv, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        // Create a vertical layout to hold text and controls
+        val contentLayout = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        // Add text view first
+        contentLayout.addView(tv, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+
+        // Add controls to the control bar
+        controlBar.addView(languageSpinner, LinearLayout.LayoutParams(
+            0,  // width will be determined by weight
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            1f  // take up remaining space
+        ))
+        
+        controlBar.addView(closeButton, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+
+        // Add control bar at the bottom
+        contentLayout.addView(controlBar, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+
+        // Add the content layout to the frame
+        addView(contentLayout, LayoutParams(
+            LayoutParams.MATCH_PARENT,
+            LayoutParams.WRAP_CONTENT
+        ))
+
         background = ContextCompat.getDrawable(context, R.drawable.caption_bg)
         setPadding(12.dp, 6.dp, 12.dp, 6.dp)   // keep text off the edge
         clipToOutline = true
+
+        // Handle taps on the overlay
+        setOnClickListener {
+            if (controlBar.visibility == View.VISIBLE) {
+                hideControls()
+            } else {
+                showControls()
+            }
+        }
+    }
+
+    private fun showControls() {
+        controlBar.visibility = View.VISIBLE
+        resetAutoHide()
+    }
+
+    private fun hideControls() {
+        controlBar.visibility = View.GONE
+        hideHandler.removeCallbacks(hideRunnable)
+    }
+
+    private fun resetAutoHide() {
+        hideHandler.removeCallbacks(hideRunnable)
+        hideHandler.postDelayed(hideRunnable, AUTO_HIDE_DELAY)
+    }
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        hideHandler.removeCallbacks(hideRunnable)
     }
 
     // ──────────────────────────────────────────────────────────────────────────────
