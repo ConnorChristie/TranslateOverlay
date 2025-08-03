@@ -19,6 +19,8 @@
     </com.google.android.material.appbar.AppBarLayout>
 
     <androidx.core.widget.NestedScrollView
+        android:id="@+id/mainScrollView"
+        android:clipToPadding="false"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         app:layout_behavior="@string/appbar_scrolling_view_behavior">
@@ -84,73 +86,6 @@
 
             </com.google.android.material.card.MaterialCardView>
 
-            <!-- OpenAI Configuration Card -->
-            <com.google.android.material.card.MaterialCardView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="16dp"
-                app:cardElevation="1dp">
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="16dp">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="OpenAI Configuration"
-                        android:textAppearance="?attr/textAppearanceTitleMedium"
-                        android:layout_marginBottom="16dp"/>
-
-                    <com.google.android.material.switchmaterial.SwitchMaterial
-                        android:id="@+id/useOpenAISwitch"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="Use OpenAI Realtime API"
-                        android:layout_marginBottom="16dp"/>
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Target Language:"
-                        android:textAppearance="?attr/textAppearanceBodyMedium"
-                        android:layout_marginBottom="8dp"/>
-
-                    <com.google.android.material.textfield.TextInputLayout
-                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginBottom="16dp">
-
-                        <AutoCompleteTextView
-                            android:id="@+id/targetLanguageSpinner"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:inputType="none"/>
-
-                    </com.google.android.material.textfield.TextInputLayout>
-
-                    <TextView
-                        android:id="@+id/openAIStatus"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="OpenAI API: Not configured"
-                        android:textAppearance="?attr/textAppearanceBodyMedium"/>
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Configure API key in local_config.properties file"
-                        android:textAppearance="?attr/textAppearanceBodySmall"
-                        android:textColor="?android:attr/textColorSecondary"
-                        android:layout_marginTop="8dp"/>
-
-                </LinearLayout>
-
-            </com.google.android.material.card.MaterialCardView>
-
             <!-- Language Settings Card -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
@@ -191,6 +126,65 @@
                             android:inputType="none"/>
 
                     </com.google.android.material.textfield.TextInputLayout>
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Target Language:"
+                        android:textAppearance="?attr/textAppearanceBodyMedium"
+                        android:layout_marginBottom="8dp"/>
+
+                    <com.google.android.material.textfield.TextInputLayout
+                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="16dp">
+
+                        <AutoCompleteTextView
+                            android:id="@+id/targetLanguageSpinner"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="none"/>
+
+                    </com.google.android.material.textfield.TextInputLayout>
+
+                </LinearLayout>
+
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- OpenAI Configuration Card -->
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="16dp"
+                app:cardElevation="1dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="OpenAI Configuration"
+                        android:textAppearance="?attr/textAppearanceTitleMedium"
+                        android:layout_marginBottom="16dp"/>
+
+                    <com.google.android.material.switchmaterial.SwitchMaterial
+                        android:id="@+id/useOpenAISwitch"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Use OpenAI Realtime API"
+                        android:layout_marginBottom="16dp"/>
+
+                    <TextView
+                        android:id="@+id/openAIStatus"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="OpenAI API: Not configured"
+                        android:textAppearance="?attr/textAppearanceBodyMedium"/>
 
                 </LinearLayout>
 

@@ -5,11 +5,19 @@
         <item>Spanish</item>
         <item>Chinese (Simplified)</item>
         <item>French</item>
+        <item>Korean</item>
+        <item>German</item>
+        <item>Japanese</item>
+        <item>Russian</item>
     </string-array>
     <string-array name="language_codes">
         <item>en</item>
         <item>es</item>
         <item>zh</item>
         <item>fr</item>
+        <item>ko</item>
+        <item>de</item>
+        <item>ja</item>
+        <item>ru</item>
     </string-array>
 </resources>

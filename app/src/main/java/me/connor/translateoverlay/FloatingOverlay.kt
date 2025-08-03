@@ -107,6 +107,10 @@ class FloatingOverlay(private val context: Context) {
         overlayView?.updateTranscript(newText, replace)
     }
 
+    fun isShown(): Boolean {
+        return overlayView != null
+    }
+
     fun remove() {
         overlayView?.let {
             windowManager.removeView(it)

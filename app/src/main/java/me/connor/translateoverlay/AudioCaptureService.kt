@@ -51,8 +51,8 @@ class AudioCaptureService : Service() {
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var running = true
     private var lastText = ""
-    private var sourceLanguage = "zh"
-    private var targetLanguage = "en"
+    private var sourceLanguage = TranslateLanguage.CHINESE
+    private var targetLanguage = TranslateLanguage.ENGLISH
 
     // Sherpa components
     private var recognizer: OnlineRecognizer? = null
@@ -195,22 +195,17 @@ class AudioCaptureService : Service() {
                         }
                     },
                     onError = { error ->
-                        overlay.updateText("OpenAI Error: $error")
                         Log.e(TAG, "OpenAI error: $error")
                     },
                     onConnectionStatus = { connected ->
-                        overlay.updateText(if (connected) "OpenAI Connected" else "OpenAI Disconnected")
                         Log.i(TAG, "OpenAI connection status: $connected")
                     }
                 )
             }
 
             recorder.startRecording()
-            overlay.updateText("OpenAI Listening…")
             executor.execute { processAudioWithOpenAI(sampleRate) }
-            
         } catch (e: Exception) {
-            overlay.updateText("OpenAI initialization error: ${e.message}")
             Log.e(TAG, "OpenAI initialization error", e)
             // Fall back to Sherpa
             initSherpa(sampleRate)
@@ -241,11 +236,11 @@ class AudioCaptureService : Service() {
         val am = applicationContext.assets
         try {
             if ((am.list("sherpa") ?: emptyArray()).isEmpty()) {
-                overlay.updateText("Missing sherpa model files in assets")
+                Log.e(TAG, "Missing sherpa model files in assets")
                 return
             }
         } catch (e: Exception) {
-            overlay.updateText("Assets dir 'sherpa' not found")
+            Log.e(TAG, "Assets dir 'sherpa' not found")
             return
         }
 
@@ -293,10 +288,8 @@ class AudioCaptureService : Service() {
 
             recognizer = OnlineRecognizer(am, onlineCfg)
             recorder.startRecording()
-            overlay.updateText("Sherpa Listening…")
             executor.execute { processAudioStreaming(sampleRate) }
         } catch (e: Exception) {
-            overlay.updateText("Sherpa initialization error: ${e.message}")
             e.printStackTrace()
         }
     }

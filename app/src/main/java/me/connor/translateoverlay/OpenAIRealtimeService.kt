@@ -18,6 +18,7 @@ class OpenAIRealtimeService {
         private const val TAG = "OpenAIRealtimeService"
         private const val OPENAI_API_URL = "https://api.openai.com/v1/realtime/transcription_sessions"
         private const val OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
+        private const val MAX_CONTEXT_SENTENCES = 2  // Keep last 2 sentences for context
     }
 
     private var webSocket: WebSocket? = null
@@ -33,6 +34,12 @@ class OpenAIRealtimeService {
     private var onError: ((String) -> Unit)? = null
     private var onConnectionStatusChanged: ((Boolean) -> Unit)? = null
     private var ephemeralToken: String? = null
+    
+    // Context management
+    private val recentSentences = mutableListOf<String>()
+    private val sentenceEndRegex = Regex("[.!?。！？]")
+    private var currentDeltaText = StringBuilder()
+    private var lastProcessedIndex = 0
 
     data class TranscriptionConfig(
         val apiKey: String,
@@ -84,20 +91,30 @@ class OpenAIRealtimeService {
                         Log.d(TAG, "Transcription session updated")
                     }
                     "conversation.item.input_audio_transcription.delta" -> {
-                        // Ignore delta events - only handle completed transcriptions
-                        // This prevents partial word-by-word updates
+                        val deltaText = jsonObject.get("delta")?.asString
+                        if (deltaText != null && deltaText.isNotBlank()) {
+                            processDeltaTranscript(deltaText)
+                        }
                     }
                     "conversation.item.input_audio_transcription.completed" -> {
-                        val transcript = jsonObject.get("transcript")?.asString
-                        if (transcript != null) {
-                            onTranscriptionReceived?.invoke(transcript)
-                        }
+                        // val transcript = jsonObject.get("transcript")?.asString
+                        // if (transcript != null) {
+                        //     processCompletedTranscript(transcript)
+                        // }
                     }
                     "input_audio_buffer.speech_started" -> {
                         Log.d(TAG, "Speech started")
                     }
                     "input_audio_buffer.speech_stopped" -> {
                         Log.d(TAG, "Speech stopped")
+                        // Process any remaining text before clearing
+                        // if (currentDeltaText.isNotBlank()) {
+                        //     processCompletedTranscript(currentDeltaText.toString())
+                        // }
+                        // Clear all buffers
+                        currentDeltaText.clear()
+                        recentSentences.clear()
+                        lastProcessedIndex = 0
                     }
                     "input_audio_buffer.committed" -> {
                         Log.d(TAG, "Audio buffer committed")
@@ -250,5 +267,70 @@ class OpenAIRealtimeService {
     fun cleanup() {
         disconnect()
         scope.cancel()
+    }
+    
+    private fun processDeltaTranscript(deltaText: String) {
+        // Append new delta text
+        currentDeltaText.append(deltaText)
+        val fullText = currentDeltaText.toString()
+        
+        // Scan for sentence endings from last processed position
+        for (i in lastProcessedIndex until fullText.length) {
+            if (sentenceEndRegex.matches(fullText[i].toString())) {
+                // Extract the sentence including the punctuation mark
+                val boundaryPos = i + 1
+                val newSentence = fullText.substring(0, boundaryPos).trim()
+                
+                if (newSentence.isNotBlank()) {
+                    // Add to recent sentences
+                    recentSentences.add(newSentence)
+                    while (recentSentences.size > MAX_CONTEXT_SENTENCES) {
+                        recentSentences.removeAt(0)
+                    }
+                    
+                    // Create context window
+                    val contextWindow = recentSentences.joinToString(" ") { it.trim() }
+                    
+                    // Send for translation
+                    onTranscriptionReceived?.invoke(contextWindow)
+                    
+                    // Remove processed text and update index
+                    currentDeltaText.delete(0, boundaryPos)
+                    lastProcessedIndex = 0
+                }
+            }
+        }
+        
+        // Update last processed index for the remaining text
+        lastProcessedIndex = currentDeltaText.length
+    }
+    
+    private fun processCompletedTranscript(transcript: String) {
+        // Handle any remaining text when transcription is complete
+        if (transcript.isNotBlank()) {
+            currentDeltaText.append(transcript)
+            val remainingText = currentDeltaText.toString().trim()
+            
+            if (remainingText.isNotBlank()) {
+                // Add final punctuation if missing
+                val finalText = if (sentenceEndRegex.find(remainingText.last().toString()) == null) {
+                    "$remainingText."
+                } else {
+                    remainingText
+                }
+                
+                recentSentences.add(finalText)
+                while (recentSentences.size > MAX_CONTEXT_SENTENCES) {
+                    recentSentences.removeAt(0)
+                }
+                
+                val contextWindow = recentSentences.joinToString(" ") { it.trim() }
+                onTranscriptionReceived?.invoke(contextWindow)
+            }
+            
+            // Clear buffers
+            currentDeltaText.clear()
+            lastProcessedIndex = 0
+        }
     }
 } 

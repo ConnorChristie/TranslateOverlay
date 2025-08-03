@@ -13,6 +13,7 @@ vosk = "0.3.30"
 voskAndroid = "0.3.47"
 libSherpaOnnx = "6.25.21"
 translate = "17.0.3"
+languageid = "17.0.4"
 material = "1.12.0"
 
 [libraries]
@@ -35,6 +36,7 @@ vosk-android = { group = "org.vosk", name = "vosk-android", version.ref = "vosk"
 alphacephei-vosk-android = { group = "com.alphacephei", name = "vosk-android", version.ref = "voskAndroid" }
 lib-sherpa-onnx = { group = "com.bihe0832.android", name = "lib-sherpa-onnx", version.ref = "libSherpaOnnx" }
 translate = { group = "com.google.mlkit", name = "translate", version.ref = "translate" }
+languageid = { group = "com.google.mlkit", name = "language-id", version.ref = "languageid" }
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
 
 [plugins]

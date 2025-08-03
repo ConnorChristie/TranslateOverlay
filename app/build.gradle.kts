@@ -50,6 +50,7 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation(libs.androidx.appcompat)
     implementation(libs.translate)
+    implementation(libs.languageid)
     implementation(files("libs/sherpa-onnx-1.12.7.aar"))
     implementation("com.google.android.material:material:1.11.0")
     

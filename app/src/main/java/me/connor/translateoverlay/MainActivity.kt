@@ -1,7 +1,10 @@
 package me.connor.translateoverlay
 
+import android.app.ActivityManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
@@ -27,11 +30,30 @@ class MainActivity : AppCompatActivity() {
     private lateinit var overlay: FloatingOverlay
     private lateinit var sourceLanguageSpinner: MaterialAutoCompleteTextView
     private lateinit var targetLanguageSpinner: MaterialAutoCompleteTextView
+    private lateinit var scrollView: androidx.core.widget.NestedScrollView
     private lateinit var useOpenAISwitch: SwitchMaterial
     private lateinit var sharedPreferences: SharedPreferences
     private lateinit var openAIConfigManager: OpenAIConfigManager
+    private lateinit var showOverlayBtn: MaterialButton
+    private lateinit var startTranscriptionBtn: MaterialButton
 
     private lateinit var mediaProjectionManager: MediaProjectionManager
+
+    // State tracking
+    private var isOverlayShown = false
+    private var isTranscriptionRunning = false
+
+    // Broadcast receiver to detect when services stop
+    private val serviceStatusReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                FloatingOverlay.ACTION_STOP_SERVICES -> {
+                    isTranscriptionRunning = false
+                    updateButtonStates()
+                }
+            }
+        }
+    }
 
     private val startActivityForResult = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -48,36 +70,39 @@ class MainActivity : AppCompatActivity() {
                 putExtra("openAITemperature", openAIConfigManager.getTemperature())
             }
             ContextCompat.startForegroundService(this, svc)
+            isTranscriptionRunning = true
+            updateButtonStates()
         }
     }
 
     companion object {
         private const val PREFS_NAME = "TranslateOverlayPrefs"
         private const val PREF_SOURCE_LANG = "sourceLanguage"
-        private const val DEFAULT_SOURCE_LANG = "zh"  // Chinese
+        private const val DEFAULT_SOURCE_LANG = TranslatorService.AUTO_DETECT  // Default to auto-detect
         
-        // Available source languages
+        // Available source languages - using ML Kit constants
         private val SOURCE_LANGUAGES = listOf(
-            Language("zh", "Chinese (中文)"),
-            Language("ko", "Korean (한국어)"),
-            Language("en", "English"),
-            Language("es", "Spanish (Español)"),
-            Language("fr", "French (Français)"),
-            Language("de", "German (Deutsch)"),
-            Language("ja", "Japanese (日本語)"),
-            Language("ru", "Russian (Русский)")
+            Language(TranslatorService.AUTO_DETECT, "Auto Detect"),
+            Language(TranslateLanguage.CHINESE, "Chinese (中文)"),
+            Language(TranslateLanguage.KOREAN, "Korean (한국어)"),
+            Language(TranslateLanguage.ENGLISH, "English"),
+            Language(TranslateLanguage.SPANISH, "Spanish (Español)"),
+            Language(TranslateLanguage.FRENCH, "French (Français)"),
+            Language(TranslateLanguage.GERMAN, "German (Deutsch)"),
+            Language(TranslateLanguage.JAPANESE, "Japanese (日本語)"),
+            Language(TranslateLanguage.RUSSIAN, "Russian (Русский)")
         )
 
-        // Available target languages
+        // Available target languages - using ML Kit constants
         private val TARGET_LANGUAGES = listOf(
-            Language("en", "English"),
-            Language("zh", "Chinese (中文)"),
-            Language("ko", "Korean (한국어)"),
-            Language("es", "Spanish (Español)"),
-            Language("fr", "French (Français)"),
-            Language("de", "German (Deutsch)"),
-            Language("ja", "Japanese (日本語)"),
-            Language("ru", "Russian (Русский)")
+            Language(TranslateLanguage.ENGLISH, "English"),
+            Language(TranslateLanguage.CHINESE, "Chinese (中文)"),
+            Language(TranslateLanguage.KOREAN, "Korean (한국어)"),
+            Language(TranslateLanguage.SPANISH, "Spanish (Español)"),
+            Language(TranslateLanguage.FRENCH, "French (Français)"),
+            Language(TranslateLanguage.GERMAN, "German (Deutsch)"),
+            Language(TranslateLanguage.JAPANESE, "Japanese (日本語)"),
+            Language(TranslateLanguage.RUSSIAN, "Russian (Русский)")
         )
     }
 
@@ -85,6 +110,14 @@ class MainActivity : AppCompatActivity() {
         setTheme(R.style.Theme_TranslateOverlay)
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        // Handle system insets so content is never hidden under the navigation bar
+        scrollView = findViewById(R.id.mainScrollView)
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(scrollView) { v, insets ->
+            val bottomInset = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars()).bottom
+            v.setPadding(v.paddingLeft, v.paddingTop, v.paddingRight, bottomInset)
+            insets
+        }
 
         sharedPreferences = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         openAIConfigManager = OpenAIConfigManager(this)
@@ -98,6 +131,8 @@ class MainActivity : AppCompatActivity() {
         sourceLanguageSpinner = findViewById(R.id.sourceLanguageSpinner)
         targetLanguageSpinner = findViewById(R.id.targetLanguageSpinner)
         useOpenAISwitch = findViewById(R.id.useOpenAISwitch)
+        showOverlayBtn = findViewById(R.id.showOverlayBtn)
+        startTranscriptionBtn = findViewById(R.id.startTranscriptionBtn)
 
         setupLanguageSpinners()
         setupOpenAIConfiguration()
@@ -115,18 +150,42 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
 
-        findViewById<MaterialButton>(R.id.startTranscriptionBtn).setOnClickListener {
-            mediaProjectionManager = getSystemService(
-                Context.MEDIA_PROJECTION_SERVICE
-            ) as MediaProjectionManager
-            startActivityForResult.launch(
-                mediaProjectionManager.createScreenCaptureIntent()
-            )
+        startTranscriptionBtn.setOnClickListener {
+            if (!isTranscriptionRunning) {
+                mediaProjectionManager = getSystemService(
+                    Context.MEDIA_PROJECTION_SERVICE
+                ) as MediaProjectionManager
+                startActivityForResult.launch(
+                    mediaProjectionManager.createScreenCaptureIntent()
+                )
+            } else {
+                // Stop transcription
+                val stopIntent = Intent(FloatingOverlay.ACTION_STOP_SERVICES)
+                sendBroadcast(stopIntent)
+                isTranscriptionRunning = false
+                updateButtonStates()
+            }
         }
 
-        findViewById<MaterialButton>(R.id.showOverlayBtn).setOnClickListener {
-            overlay.show(true)
+        showOverlayBtn.setOnClickListener {
+            if (!isOverlayShown) {
+                overlay.show(true)
+                isOverlayShown = true
+            } else {
+                overlay.remove()
+                isOverlayShown = false
+            }
+            updateButtonStates()
         }
+
+        // Register broadcast receiver for service status
+        val filter = IntentFilter(FloatingOverlay.ACTION_STOP_SERVICES)
+        ContextCompat.registerReceiver(
+            this,
+            serviceStatusReceiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
     }
 
     private fun setupLanguageSpinners() {
@@ -147,7 +206,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Save selection when changed
-        sourceLanguageSpinner.setOnItemClickListener { parent, _, position, _ ->
+        sourceLanguageSpinner.setOnItemClickListener { _, _, position, _ ->
             val selectedLanguage = SOURCE_LANGUAGES[position].code
             sharedPreferences.edit()
                 .putString(PREF_SOURCE_LANG, selectedLanguage)
@@ -171,7 +230,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Save selection when changed
-        targetLanguageSpinner.setOnItemClickListener { parent, _, position, _ ->
+        targetLanguageSpinner.setOnItemClickListener { _, _, position, _ ->
             val selectedLanguage = TARGET_LANGUAGES[position].code
             openAIConfigManager.setTargetLanguage(selectedLanguage)
         }
@@ -211,6 +270,22 @@ class MainActivity : AppCompatActivity() {
         updateOverlayStatus()
         updateAccessibilityStatus()
         updateOpenAIStatus()
+        // Update overlay state based on actual overlay status
+        isOverlayShown = overlay.isShown()
+        // Check if transcription service is running
+        isTranscriptionRunning = isServiceRunning(AudioCaptureService::class.java)
+        updateButtonStates()
+    }
+
+    private fun isServiceRunning(serviceClass: Class<*>): Boolean {
+        val manager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        @Suppress("DEPRECATION")
+        for (service in manager.getRunningServices(Integer.MAX_VALUE)) {
+            if (serviceClass.name == service.service.className) {
+                return true
+            }
+        }
+        return false
     }
 
     private fun updateOverlayStatus() {
@@ -237,6 +312,20 @@ class MainActivity : AppCompatActivity() {
 
         accessibilityStatus.text = "Accessibility service: " +
                 if (accEnabled) "ENABLED ✅" else "NOT ENABLED ❌"
+    }
+
+    private fun updateButtonStates() {
+        startTranscriptionBtn.text = if (isTranscriptionRunning) "Stop Transcription" else "Start Transcription"
+        showOverlayBtn.text = if (isOverlayShown) "Hide Overlay" else "Show Overlay"
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            unregisterReceiver(serviceStatusReceiver)
+        } catch (e: IllegalArgumentException) {
+            // Receiver not registered
+        }
     }
 
     private data class Language(val code: String, val displayName: String)
