@@ -107,11 +107,11 @@ class OpenAIRealtimeService {
                     }
                     "input_audio_buffer.speech_stopped" -> {
                         Log.d(TAG, "Speech stopped")
-                        // Process any remaining text before clearing
-                        // if (currentDeltaText.isNotBlank()) {
-                        //     processCompletedTranscript(currentDeltaText.toString())
-                        // }
-                        // Clear all buffers
+                        // Flush any remaining partial to reduce dropped words
+                        if (currentDeltaText.isNotBlank()) {
+                            processCompletedTranscript(currentDeltaText.toString())
+                        }
+                        // Clear all buffers for the next turn
                         currentDeltaText.clear()
                         recentSentences.clear()
                         lastProcessedIndex = 0
@@ -288,11 +288,8 @@ class OpenAIRealtimeService {
                         recentSentences.removeAt(0)
                     }
                     
-                    // Create context window
-                    val contextWindow = recentSentences.joinToString(" ") { it.trim() }
-                    
-                    // Send for translation
-                    onTranscriptionReceived?.invoke(contextWindow)
+                    // Emit only the newly completed sentence; callers can manage context/buffering
+                    onTranscriptionReceived?.invoke(newSentence)
                     
                     // Remove processed text and update index
                     currentDeltaText.delete(0, boundaryPos)
@@ -301,7 +298,7 @@ class OpenAIRealtimeService {
             }
         }
         
-        // Update last processed index for the remaining text
+        // Update last processed index for the remaining text (do not emit partials without punctuation)
         lastProcessedIndex = currentDeltaText.length
     }
     
@@ -318,14 +315,7 @@ class OpenAIRealtimeService {
                 } else {
                     remainingText
                 }
-                
-                recentSentences.add(finalText)
-                while (recentSentences.size > MAX_CONTEXT_SENTENCES) {
-                    recentSentences.removeAt(0)
-                }
-                
-                val contextWindow = recentSentences.joinToString(" ") { it.trim() }
-                onTranscriptionReceived?.invoke(contextWindow)
+                onTranscriptionReceived?.invoke(finalText)
             }
             
             // Clear buffers

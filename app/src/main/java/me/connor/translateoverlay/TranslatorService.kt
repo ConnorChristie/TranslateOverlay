@@ -54,7 +54,7 @@ class TranslatorService : Service() {
     private lateinit var languageIdentifier: LanguageIdentifier
     private var sourceLanguage: String = AUTO_DETECT  // Default to auto-detect
     private var targetLanguage: String = TranslateLanguage.ENGLISH  // Now dynamic
-    private var lastDetectedLanguage: String = TranslateLanguage.ENGLISH  // Fallback language
+    private var lastDetectedLanguage: String? = null  // Set after first detection when using auto-detect
 
     // Language change receiver
     private val languageChangeReceiver = object : BroadcastReceiver() {
@@ -77,7 +77,9 @@ class TranslatorService : Service() {
         super.onCreate()
         // Initialize language identifier
         languageIdentifier = LanguageIdentification.getClient()
-        
+        // Don't initialize the translator here. We wait until explicit languages are provided
+        // or a language is detected when using auto-detect.
+
         // Register for language change broadcasts
         val filter = IntentFilter(FloatingOverlay.ACTION_LANGUAGE_CHANGED)
         ContextCompat.registerReceiver(
@@ -106,7 +108,11 @@ class TranslatorService : Service() {
         return START_STICKY
     }
 
-    private fun updateLanguageAndTranslator(newSourceLang: String? = null, newTargetLang: String? = null) {
+    private fun updateLanguageAndTranslator(
+        newSourceLang: String? = null,
+        newTargetLang: String? = null,
+        forceInit: Boolean = false
+    ) {
         var needsReinit = false
         
         // Update source language if valid
@@ -121,17 +127,24 @@ class TranslatorService : Service() {
             needsReinit = true
         }
         
-        // Only reinitialize if needed
-        if (needsReinit) {
-            val actualSourceLang = if (sourceLanguage == AUTO_DETECT) lastDetectedLanguage else sourceLanguage
-            
+        val shouldInit = forceInit || needsReinit || !::translator.isInitialized
+
+        if (shouldInit) {
+            val actualSourceLangOrNull = if (sourceLanguage == AUTO_DETECT) lastDetectedLanguage else sourceLanguage
+
+            // If using auto-detect but we have not detected a language yet, defer initialization
+            if (actualSourceLangOrNull == null) {
+                Log.i(TAG, "Deferring translator init: auto-detect enabled and no language detected yet")
+                return
+            }
+
             // Close existing translator before creating new one
             if (::translator.isInitialized) {
                 translator.close()
             }
-            
+
             val options = TranslatorOptions.Builder()
-                .setSourceLanguage(actualSourceLang)
+                .setSourceLanguage(actualSourceLangOrNull)
                 .setTargetLanguage(targetLanguage)
                 .build()
             translator = com.google.mlkit.nl.translate.Translation.getClient(options)
@@ -141,16 +154,16 @@ class TranslatorService : Service() {
                 .build()
             translator.downloadModelIfNeeded(conditions)
                 .addOnSuccessListener {
-                    Log.i(TAG, "Translation model downloaded successfully for $actualSourceLang -> $targetLanguage")
+                    Log.i(TAG, "Translation model downloaded successfully for $actualSourceLangOrNull -> $targetLanguage")
                 }
                 .addOnFailureListener { e ->
-                    Log.e(TAG, "Failed to download translation model for $actualSourceLang -> $targetLanguage", e)
+                    Log.e(TAG, "Failed to download translation model for $actualSourceLangOrNull -> $targetLanguage", e)
                 }
         }
     }
 
     private fun initializeTranslator() {
-        updateLanguageAndTranslator()
+        updateLanguageAndTranslator(forceInit = true)
     }
 
     override fun onBind(intent: Intent): IBinder = binder
@@ -162,7 +175,9 @@ class TranslatorService : Service() {
         } catch (e: IllegalArgumentException) {
             // Receiver not registered
         }
-        translator.close()
+        if (::translator.isInitialized) {
+            translator.close()
+        }
     }
 
     fun translateText(
@@ -175,8 +190,20 @@ class TranslatorService : Service() {
             return
         }
 
-        // If auto-detect is enabled, first identify the language
+        // If auto-detect is enabled, prefer using the last detected language if available
         if (sourceLanguage == AUTO_DETECT) {
+            if (lastDetectedLanguage != null && ::translator.isInitialized) {
+                translator.translate(input)
+                    .addOnSuccessListener { translatedText ->
+                        callback(translatedText)
+                    }
+                    .addOnFailureListener { e ->
+                        Log.e(TAG, "Translation failed for ${lastDetectedLanguage ?: "unknown"} -> $targetLanguage", e)
+                        callback(null)
+                    }
+                return
+            }
+            // Otherwise, identify language for the first time or after change
             languageIdentifier.identifyLanguage(input)
                 .addOnSuccessListener { detectedLang ->
                     if (detectedLang == targetLanguage) {
@@ -189,33 +216,43 @@ class TranslatorService : Service() {
                     if (detectedLang in SUPPORTED_SOURCE_LANGUAGES) {
                         if (detectedLang != lastDetectedLanguage) {
                             lastDetectedLanguage = detectedLang
-                            // Update translator with new detected language
-                            updateLanguageAndTranslator()
+                            // Initialize or reinitialize translator with the detected language
+                            updateLanguageAndTranslator(forceInit = true)
                         }
                     } else {
                         // If detected language is not supported, use last known language
-                        Log.w(TAG, "Detected unsupported language: $detectedLang, falling back to $lastDetectedLanguage")
+                        Log.w(TAG, "Detected unsupported language: $detectedLang, falling back to ${lastDetectedLanguage ?: "unknown"}")
                     }
 
                     // Perform translation
+                    if (!::translator.isInitialized) {
+                        Log.w(TAG, "Translator not initialized yet; skipping translation this time")
+                        callback(null)
+                        return@addOnSuccessListener
+                    }
                     translator.translate(input)
                         .addOnSuccessListener { translatedText ->
                             callback(translatedText)
                         }
                         .addOnFailureListener { e ->
-                            Log.e(TAG, "Translation failed for $lastDetectedLanguage -> $targetLanguage", e)
+                            Log.e(TAG, "Translation failed for ${lastDetectedLanguage ?: "unknown"} -> $targetLanguage", e)
                             callback(null)
                         }
                 }
                 .addOnFailureListener { e ->
                     Log.e(TAG, "Language detection failed", e)
                     // Fall back to last known language
+                    if (!::translator.isInitialized) {
+                        Log.w(TAG, "Translator not initialized after detection failure; skipping translation")
+                        callback(null)
+                        return@addOnFailureListener
+                    }
                     translator.translate(input)
                         .addOnSuccessListener { translatedText ->
                             callback(translatedText)
                         }
                         .addOnFailureListener { e2 ->
-                            Log.e(TAG, "Translation failed for $lastDetectedLanguage -> $targetLanguage", e2)
+                            Log.e(TAG, "Translation failed for ${lastDetectedLanguage ?: "unknown"} -> $targetLanguage", e2)
                             callback(null)
                         }
                 }

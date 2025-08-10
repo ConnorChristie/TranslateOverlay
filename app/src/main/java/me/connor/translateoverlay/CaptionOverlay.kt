@@ -119,6 +119,9 @@ class CaptionOverlay @JvmOverloads constructor(
     private val hideRunnable = Runnable { hideControls() }
     private val AUTO_HIDE_DELAY = 3000L // 3 seconds
 
+    /** If true, broadcast a stop request when this view detaches (used for STT overlay). */
+    var stopServicesOnDetach: Boolean = false
+
     init {
         // Create a vertical layout to hold text and controls
         val contentLayout = LinearLayout(context).apply {
@@ -187,6 +190,13 @@ class CaptionOverlay @JvmOverloads constructor(
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         hideHandler.removeCallbacks(hideRunnable)
+        if (stopServicesOnDetach) {
+            // Ensure services are stopped if STT overlay is removed or dismissed by the system
+            context.sendBroadcast(
+                Intent(FloatingOverlay.ACTION_STOP_SERVICES)
+                    .setPackage(context.packageName)
+            )
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────────────────
@@ -252,6 +262,15 @@ class CaptionOverlay @JvmOverloads constructor(
      */
     private fun wrapAndPush(text: String) {
         if (text.isBlank()) return
+
+        // Ensure a single boundary space when concatenating chunks mid-line
+        if (currentLine.isNotEmpty()) {
+            val lastChar = currentLine.last()
+            val firstNew = text.first()
+            val needsSpace = !lastChar.isWhitespace() && !firstNew.isWhitespace()
+            if (needsSpace) currentLine.append(' ')
+        }
+
         currentLine.append(text)
 
         val widthPx = resources.displayMetrics.widthPixels * 0.8f

@@ -55,8 +55,8 @@ class AudioCaptureService : Service() {
     private var targetLanguage = TranslateLanguage.ENGLISH
 
     // Sherpa components
-    private var recognizer: OnlineRecognizer? = null
-    private var punct: OfflinePunctuation? = null
+    private var recognizer: OfflineRecognizer? = null
+    private var vad: Vad? = null
 
     // OpenAI components
     private var openAIService: OpenAIRealtimeService? = null
@@ -67,6 +67,14 @@ class AudioCaptureService : Service() {
 
     private var translatorService: TranslatorService? = null
     private var isBound = false
+
+    // Sentence buffering for Sherpa path
+    private val sherpaBuffer = StringBuilder()
+    private var sherpaPrev: String = ""
+    private val sentenceEndRegex = Regex("[.!?。！？]")
+
+    // OpenAI sentence/partial display buffering (translated)
+    private val openAIFinalizedDisplay = StringBuilder()
 
     private val stopServiceReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -182,15 +190,28 @@ class AudioCaptureService : Service() {
                     config = config,
                     onTranscription = { transcription ->
                         if (transcription.isNotBlank()) {
-                            if (sourceLanguage != targetLanguage) {
-                                // Use ML Kit translation service since OpenAI transcription sessions don't support translation
-                                translatorService?.translateText(transcription) { translated ->
-                                    overlay.updateText(addSpaceAfterPunctuation(translated!!))
-                                    Log.i(TAG, "OpenAI transcription + ML Kit translation: $transcription -> $translated")
+                            // Buffer only up to completed sentence boundaries; keep remainder for next time.
+                            // Enforce a max-latency partial emission of the remainder with ellipsis.
+                            val (sentences, remainder) = TextProcessingUtils.splitCompletedSentences(transcription)
+
+                            // Emit completed sentences immediately
+                            for (sentence in sentences) {
+                                if (sourceLanguage != targetLanguage) {
+                                    translatorService?.translateText(sentence) { translated ->
+                                        val safeText = translated ?: sentence
+                                        // Ensure a trailing space to separate from next sentence
+                                        overlay.updateText(TextProcessingUtils.normalizeAndSpace(safeText) + " ")
+                                        Log.i(TAG, "OpenAI transcription + ML Kit translation: $sentence -> ${translated ?: "(fallback original)"}")
+                                    }
+                                } else {
+                                    overlay.updateText(TextProcessingUtils.normalizeAndSpace(sentence) + " ")
+                                    Log.i(TAG, "OpenAI transcription: $sentence")
                                 }
-                            } else {
-                                overlay.updateText(addSpaceAfterPunctuation(transcription))
-                                Log.i(TAG, "OpenAI transcription: $transcription")
+                            }
+
+                            // For remainder, show a throttled preview if it's getting long to avoid stalling
+                            if (remainder.isNotBlank()) {
+                                throttledPreview(remainder)
                             }
                         }
                     },
@@ -232,6 +253,28 @@ class AudioCaptureService : Service() {
         }
     }
 
+    // ──────────────────────────────────────────────────────────────────────────────
+    // OpenAI remainder preview (throttled)
+    // ──────────────────────────────────────────────────────────────────────────────
+    private var lastPreviewTimeMs: Long = 0
+    private val PREVIEW_MIN_INTERVAL_MS = 900L
+    private fun throttledPreview(remainder: String) {
+        val now = System.currentTimeMillis()
+        if (now - lastPreviewTimeMs < PREVIEW_MIN_INTERVAL_MS) return
+        lastPreviewTimeMs = now
+        val preview = TextProcessingUtils.normalizeAndSpace(remainder).let {
+            if (it.endsWith("…") || it.endsWith(".")) it else "$it …"
+        }
+        if (sourceLanguage != targetLanguage) {
+            translatorService?.translateText(preview) { translated ->
+                val safe = translated ?: preview
+                    overlay.updateText(TextProcessingUtils.normalizeAndSpace(safe) + " ")
+            }
+        } else {
+            overlay.updateText(preview + " ")
+        }
+    }
+
     private fun initSherpa(sampleRate: Int) {
         val am = applicationContext.assets
         try {
@@ -245,133 +288,80 @@ class AudioCaptureService : Service() {
         }
 
         try {
-            val config = OfflinePunctuationConfig(
-                model = OfflinePunctuationModelConfig(
-                    ctTransformer = "sherpa/punct-model.onnx",
-                    numThreads = 1,
-                    debug = false,
-                    provider = "cpu",
-                )
-            )
-            punct = OfflinePunctuation(am, config = config)
-
-            val transducerCfg = OnlineTransducerModelConfig(
-                encoder = "sherpa/encoder.onnx",
-                decoder = "sherpa/decoder.onnx",
-                joiner = "sherpa/joiner.onnx"
-            )
-            val modelCfg = OnlineModelConfig(
-                transducer = transducerCfg,
-                paraformer = OnlineParaformerModelConfig(),
-                tokens = "sherpa/tokens.txt",
-                numThreads = 2,
-                debug = false,
+            // Initialize VAD
+            val vadConfig = VadModelConfig(
+                sileroVadModelConfig = SileroVadModelConfig(
+                    model = "sherpa/silero_vad.int8.onnx",
+                    threshold = 0.5F,
+                    minSilenceDuration = 0.25F,
+                    minSpeechDuration = 0.25F,
+                    windowSize = 512,
+                ),
+                sampleRate = 16000,
+                numThreads = 1,
                 provider = "cpu",
-                modelType = ""
             )
-            val lmCfg = OnlineLMConfig(model = "", scale = 0.5f)
-            val epRules = EndpointConfig(
-                EndpointRule(false, 2.4f, 0f),
-                EndpointRule(true, 1.2f, 0f),
-                EndpointRule(false, 0f, 20f)
-            )
-            val onlineCfg = OnlineRecognizerConfig(
-                featConfig = FeatureConfig(sampleRate, 80),
-                modelConfig = modelCfg,
-                lmConfig = lmCfg,
-                endpointConfig = epRules,
-                enableEndpoint = true,
-                maxActivePaths = 4,
-                decodingMethod = "greedy_search",
-                blankPenalty = 0f
-            )
+            vad = Vad(am, vadConfig)
 
-            recognizer = OnlineRecognizer(am, onlineCfg)
+            // Initialize offline recognizer
+            val modelConfig = OfflineRecognizerConfig().apply {
+                this.modelConfig = OfflineModelConfig().apply {
+                    senseVoice = OfflineSenseVoiceModelConfig().apply {
+                        model = "sherpa/sense-voice-model.onnx"
+                        useInverseTextNormalization = true
+                        language = "auto"
+                    }
+                    tokens = "sherpa/sense-voice-tokens.txt"
+                    numThreads = 2
+                    debug = false
+                }
+            }
+
+            recognizer = OfflineRecognizer(am, modelConfig)
             recorder.startRecording()
             executor.execute { processAudioStreaming(sampleRate) }
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "Failed to initialize Sherpa components", e)
         }
     }
 
     private fun processAudioStreaming(sampleRate: Int) {
-        val stream = recognizer?.createStream() ?: return
-        val intervalSecs = 1.4
-        val bufferSize = (intervalSecs * sampleRate).toInt()
-        val buffer = ShortArray(bufferSize)
-
-        // ← holds "end" indexes (exclusive) of each sentence we've seen
-        val sentenceBoundaries = mutableListOf<Int>()
-        // ← avoid rescanning old text
-        var lastProcessedIndex = 0
-        // matches any punctuation char
-        val sentenceEnd = Regex("[\\p{Punct}]")
+        val windowSize = 512 // samples, fixed window size for VAD
+        val buffer = ShortArray(windowSize)
 
         while (running && recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
             val bytesRead = recorder.read(buffer, 0, buffer.size)
             if (bytesRead > 0) {
-                // feed audio
+                // Convert to float samples and feed to VAD
                 val samples = FloatArray(bytesRead) { buffer[it] / 32768.0f }
-                stream.acceptWaveform(samples, sampleRate)
-                while (recognizer?.isReady(stream) == true) recognizer?.decode(stream)
+                vad?.acceptWaveform(samples)
 
-                // on endpoint, tack on a bit of silence to flush
-                val isEndpoint = recognizer?.isEndpoint(stream) == true
-                var rawText = recognizer?.getResult(stream)?.text ?: ""
-                if (isEndpoint && recognizer?.config?.modelConfig?.paraformer?.encoder?.isNotBlank() == true) {
-                    val tail = FloatArray((0.8 * sampleRate).toInt())
-                    stream.acceptWaveform(tail, sampleRate)
-                    while (recognizer?.isReady(stream) == true) recognizer?.decode(stream)
-                    rawText = recognizer?.getResult(stream)?.text ?: ""
-                }
+                // Process any complete VAD segments
+                // The VAD system automatically includes some context before and after speech
+                while (!vad?.empty()!!) {
+                    val segment = vad?.front()
+                    vad?.pop()
 
-                if (rawText.isNotBlank()) {
-                    // add punctuation predictions
-                    val punctuated = punct?.addPunctuation(rawText) ?: rawText
+                    if (segment != null) {
+                        val stream = recognizer?.createStream()
+                        if (stream != null) {
+                            stream.acceptWaveform(segment.samples, sampleRate)
+                            recognizer?.decode(stream)
 
-                    // scan only new chars for punctuation
-                    for (i in lastProcessedIndex until punctuated.length) {
-                        if (sentenceEnd.matches(punctuated[i].toString())) {
-                            // record the boundary just *after* this punctuation
-                            val boundaryPos = i + 1
-                            sentenceBoundaries.add(boundaryPos)
-                            lastProcessedIndex = boundaryPos
+                            val result = recognizer?.getResult(stream)
+                            var text = result?.text ?: ""
 
-                            // decide where our two‑sentence window starts:
-                            // if we've seen ≥3 sentences, start at boundary[n-3],
-                            // else start at 0
-                            val startIndex = if (sentenceBoundaries.size >= 3) {
-                                sentenceBoundaries[sentenceBoundaries.size - 3]
-                            } else {
-                                0
-                            }
-                            val endIndex = boundaryPos
-
-                            // extract exactly the previous + current sentence
-                            val window = punctuated
-                                .substring(startIndex, endIndex)
-                                .trim()
-
-                            if (window.isEmpty()) continue
-
-                            // now translate or display the two-sentence block
-                            // Always translate if source language is not English
-                            if (sourceLanguage != targetLanguage) {
-                                translatorService?.translateText(window) { translated ->
-                                    overlay.updateText(addSpaceAfterPunctuation(translated!!))
-                                    Log.i(TAG, "Translated text: $translated")
+                            if (text.isNotBlank()) {
+                                Log.i(TAG, "Original text: $text")
+                                // Compute delta against previous to avoid repeats/rewrites
+                                    val delta = extractDeltaIncremental(text)
+                                if (delta.isNotBlank()) {
+                                    sherpaBuffer.append(delta)
+                                        drainSherpaBuffer()
                                 }
-                            } else {
-                                overlay.updateText(addSpaceAfterPunctuation(window))
-                                Log.i(TAG, "Displayed text: $window")
                             }
 
-                            // if it's a hard endpoint, reset recognizer state
-                            if (isEndpoint) {
-                                recognizer?.reset(stream)
-                                sentenceBoundaries.clear()
-                                lastProcessedIndex = 0
-                            }
+                            stream.release()
                         }
                     }
                 }
@@ -379,8 +369,6 @@ class AudioCaptureService : Service() {
 
             Thread.sleep(20)
         }
-
-        stream.release()
     }
 
     override fun onDestroy() {
@@ -398,6 +386,18 @@ class AudioCaptureService : Service() {
             // Receiver not registered
         }
 
+        // Flush any remaining buffered text from Sherpa path
+        if (sherpaBuffer.isNotBlank()) {
+            val remaining = sherpaBuffer.toString().trim()
+            if (remaining.isNotEmpty()) {
+                translatorService?.translateText(remaining) { translated ->
+                    val safeText = translated ?: remaining
+                    overlay.updateText(TextProcessingUtils.normalizeAndSpace(safeText) + " ")
+                }
+            }
+            sherpaBuffer.clear()
+        }
+
         // Remove the overlay and unregister its receivers
         overlay.remove()
 
@@ -412,7 +412,7 @@ class AudioCaptureService : Service() {
         recorder.stop()
         recorder.release()
         recognizer?.release()
-        punct?.release()
+        vad?.release()
         executor.shutdown()
         scope.cancel()
     }
@@ -434,8 +434,64 @@ class AudioCaptureService : Service() {
 
     fun addSpaceAfterPunctuation(input: String): String {
         val regex = Regex("""([\p{Punct}&&[^']])(?!\s)""")
-        return input.replace(regex) { match ->
+        val spaced = input.replace(regex) { match ->
             "${match.value} "
+        }
+        // Normalize whitespace to single spaces and trim
+        return spaced.replace(Regex("\\s+"), " ").trim()
+    }
+
+    private fun splitIntoReadableChunks(text: String): List<String> {
+        // Prefer splitting by sentence terminators; fallback to ~80 char chunks
+        val sentences = text.split(Regex("""(?<=[.!?。！？])\s+"""))
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        if (sentences.size > 1) return sentences
+
+        val maxLen = 80
+        val chunks = mutableListOf<String>()
+        var start = 0
+        while (start < text.length) {
+            val end = (start + maxLen).coerceAtMost(text.length)
+            var cut = text.lastIndexOf(' ', end - 1)
+            if (cut <= start) cut = end
+            chunks.add(text.substring(start, cut).trim())
+            start = cut
+        }
+        return chunks.filter { it.isNotEmpty() }
+    }
+
+    private fun extractDeltaIncremental(now: String): String {
+        if (sherpaPrev.isEmpty()) {
+            sherpaPrev = now
+            return now
+        }
+        val anchorChars = 32
+        val anchor = sherpaPrev.takeLast(kotlin.math.min(anchorChars, sherpaPrev.length))
+        val idx = now.lastIndexOf(anchor)
+        val delta = if (idx >= 0) {
+            now.substring(idx + anchor.length)
+        } else {
+            now
+        }
+        sherpaPrev = now
+        return delta
+    }
+
+    private fun drainSherpaBuffer() {
+        if (sherpaBuffer.isBlank()) return
+        val text = sherpaBuffer.toString()
+        val lastPunct = sentenceEndRegex.findAll(text).lastOrNull()
+        if (lastPunct != null) {
+            val (sentences, remainder) = TextProcessingUtils.splitCompletedSentences(text)
+            for (sentence in sentences) {
+                translatorService?.translateText(sentence) { translated ->
+                    val safeText = translated ?: sentence
+                    overlay.updateText(TextProcessingUtils.normalizeAndSpace(safeText) + " ")
+                }
+            }
+            sherpaBuffer.clear()
+            sherpaBuffer.append(remainder)
         }
     }
 }

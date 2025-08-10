@@ -69,16 +69,22 @@ class FloatingOverlay(private val context: Context) {
             )
         }
 
-        // Register for stop services broadcast
-        val stopFilter = IntentFilter(ACTION_STOP_SERVICES)
-        ContextCompat.registerReceiver(
-            context,
-            stopServicesReceiver,
-            stopFilter,
-            ContextCompat.RECEIVER_NOT_EXPORTED
-        )
+        // Register for stop services broadcast ONLY for accessibility overlay.
+        // For the STT overlay owned by a Service, the Service handles stop and removes the overlay.
+        if (updateTextOnAccessibility) {
+            val stopFilter = IntentFilter(ACTION_STOP_SERVICES)
+            ContextCompat.registerReceiver(
+                context,
+                stopServicesReceiver,
+                stopFilter,
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
+        }
 
         overlayView = CaptionOverlay(context).apply {
+            // If this is the STT overlay (not the accessibility drag overlay),
+            // stop services when the view detaches (dismissed or removed).
+            stopServicesOnDetach = !updateTextOnAccessibility
             setOnTouchListener(CombinedTouchListener())
         }
 
