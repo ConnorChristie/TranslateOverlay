@@ -11,7 +11,10 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.WindowManager.LayoutParams
+import android.view.ContextThemeWrapper
 import androidx.core.content.ContextCompat
+
+private enum class DragMode { NONE, DRAG, RESIZE }
 
 class FloatingOverlay(private val context: Context) {
 
@@ -81,7 +84,8 @@ class FloatingOverlay(private val context: Context) {
             )
         }
 
-        overlayView = CaptionOverlay(context).apply {
+        val themedContext = ContextThemeWrapper(context, R.style.Theme_TranslateOverlay)
+        overlayView = CaptionOverlay(themedContext).apply {
             // If this is the STT overlay (not the accessibility drag overlay),
             // stop services when the view detaches (dismissed or removed).
             stopServicesOnDetach = !updateTextOnAccessibility
@@ -90,7 +94,10 @@ class FloatingOverlay(private val context: Context) {
 
         val type = LayoutParams.TYPE_APPLICATION_OVERLAY
         val screenW = context.resources.displayMetrics.widthPixels
-        val overlayW = (screenW * 0.8).toInt() // 80%
+        val defaultW = (screenW * 0.8).toInt() // 80%
+        val minW = 200.dp
+        val savedW = prefs.getInt(KEY_WIDTH, defaultW)
+        val overlayW = savedW.coerceIn(minW, screenW)
 
         params = LayoutParams(
             overlayW,
@@ -136,8 +143,13 @@ class FloatingOverlay(private val context: Context) {
         private var lastY = 0
         private var initialX = 0
         private var initialY = 0
+        private var startWidth = 0
+        private var mode: DragMode = DragMode.NONE
         private val CLICK_DURATION = 200L
         private val DRAG_THRESHOLD = 10
+        private val RESIZE_EDGE = 32.dp
+
+        
 
         override fun onTouch(v: View, ev: MotionEvent): Boolean {
             when (ev.actionMasked) {
@@ -146,32 +158,67 @@ class FloatingOverlay(private val context: Context) {
                     lastY = ev.rawY.toInt()
                     initialX = lastX
                     initialY = lastY
+                    startWidth = params?.width ?: 0
                     lastTouchDownTime = System.currentTimeMillis()
                     isDragging = false
+
+                    // Decide if we're grabbing the resize area (bottom-right corner)
+                    val localX = ev.x.toInt()
+                    val localY = ev.y.toInt()
+                    val vW = v.width
+                    val vH = v.height
+                    val nearRight = vW - localX <= RESIZE_EDGE
+                    val nearBottom = vH - localY <= RESIZE_EDGE
+                    mode = if (nearRight && nearBottom) DragMode.RESIZE else DragMode.NONE
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = ev.rawX.toInt() - lastX
                     val dy = ev.rawY.toInt() - lastY
-                    
-                    // Check if we've moved enough to consider it a drag
-                    val totalMoved = Math.abs(ev.rawX.toInt() - initialX) + Math.abs(ev.rawY.toInt() - initialY)
-                    if (totalMoved > DRAG_THRESHOLD) {
-                        isDragging = true
-                    }
-
-                    if (isDragging) {
-                        params?.let {
-                            it.x += dx
-                            it.y += dy
-                            windowManager.updateViewLayout(v, it)
+                    when (mode) {
+                        DragMode.RESIZE -> {
+                            val minW = 200.dp
+                            val maxW = context.resources.displayMetrics.widthPixels
+                            params?.let {
+                                val newW = (it.width + dx).coerceIn(minW, maxW)
+                                if (newW != it.width) {
+                                    it.width = newW
+                                    windowManager.updateViewLayout(v, it)
+                                }
+                            }
+                            lastX = ev.rawX.toInt()
+                            lastY = ev.rawY.toInt()
                         }
-                        lastX = ev.rawX.toInt()
-                        lastY = ev.rawY.toInt()
+                        else -> {
+                            // Check if we've moved enough to consider it a drag
+                            val totalMoved = Math.abs(ev.rawX.toInt() - initialX) + Math.abs(ev.rawY.toInt() - initialY)
+                            if (totalMoved > DRAG_THRESHOLD) {
+                                isDragging = true
+                            }
+
+                            if (isDragging) {
+                                params?.let {
+                                    it.x += dx
+                                    it.y += dy
+                                    windowManager.updateViewLayout(v, it)
+                                }
+                                lastX = ev.rawX.toInt()
+                                lastY = ev.rawY.toInt()
+                            }
+                        }
                     }
                 }
                 MotionEvent.ACTION_UP -> {
                     val touchDuration = System.currentTimeMillis() - lastTouchDownTime
-                    if (!isDragging && touchDuration < CLICK_DURATION) {
+                    if (mode == DragMode.RESIZE) {
+                        // Save updated width after resize
+                        params?.let {
+                            prefs.edit()
+                                .putInt(KEY_WIDTH, it.width)
+                                .putInt(KEY_HEIGHT, v.height)
+                                .apply()
+                        }
+                        mode = DragMode.NONE
+                    } else if (!isDragging && touchDuration < CLICK_DURATION) {
                         // This was a tap - let the CaptionOverlay handle it
                         v.performClick()
                     } else if (isDragging) {

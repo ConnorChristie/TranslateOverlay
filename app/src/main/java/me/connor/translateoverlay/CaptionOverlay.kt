@@ -5,15 +5,23 @@ import android.content.Intent
 import android.content.res.Resources
 import android.graphics.Color
 import android.graphics.Paint
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.text.Layout
 import android.text.TextPaint
 import android.util.AttributeSet
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.widget.*
+import android.content.SharedPreferences
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.widget.TextViewCompat
+import com.google.android.material.color.MaterialColors
+import com.google.android.material.shape.MaterialShapeDrawable
+import com.google.android.material.shape.ShapeAppearanceModel
 import kotlin.math.min
 
 val Int.dp: Int
@@ -46,28 +54,44 @@ class CaptionOverlay @JvmOverloads constructor(
     /** Holds the line we're still building; NOT yet pushed to [ring]. */
     private val currentLine = StringBuilder()
 
-    /** Paint used solely to measure text width for word‑wrapping. */
-    private val paint: TextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-        textSize = 16.dp.toFloat()
-    }
+    // No manual width-based wrapping; rely on TextView layout.
 
     /** The caption TextView that the user sees. */
     private val tv = TextView(context).apply {
         gravity = Gravity.BOTTOM or Gravity.START
         maxLines = maxVisibleLines
-        setLineSpacing(2f, 1f)
+        setLineSpacing(2f, 1.05f)
         setTextIsSelectable(false)
-        setTextColor(Color.WHITE)
-        setPadding(0, 0, 0, 8.dp) // Add bottom padding for controls
+        // Apply Material3 body text appearance and colors
+        TextViewCompat.setTextAppearance(this, com.google.android.material.R.style.TextAppearance_Material3_BodyLarge)
+        val onSurface = MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurface)
+        setTextColor(onSurface)
+        setPadding(12.dp, 10.dp, 12.dp, 10.dp)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NORMAL
+            breakStrategy = Layout.BREAK_STRATEGY_BALANCED
+        }
     }
+
+    // We no longer pre-wrap by width; let TextView wrap naturally.
 
     /** Control bar containing language spinner and close button */
     private val controlBar = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        setPadding(4.dp, 4.dp, 4.dp, 4.dp)
+        setPadding(8.dp, 6.dp, 8.dp, 6.dp)
         visibility = View.GONE // Initially hidden
-        setBackgroundColor(Color.parseColor("#33000000")) // Semi-transparent background
+        // Subtle surface-variant chip-like bar
+        val surfaceVariant = MaterialColors.getColor(this, com.google.android.material.R.attr.colorSurfaceVariant)
+        val outline = MaterialColors.getColor(this, com.google.android.material.R.attr.colorOutline)
+        background = MaterialShapeDrawable(
+            ShapeAppearanceModel.builder().setAllCornerSizes(12.dp.toFloat()).build()
+        ).apply {
+            fillColor = ContextCompat.getColorStateList(context, android.R.color.transparent)
+            setTint(surfaceVariant)
+            setStroke(1f, outline and 0x33FFFFFF)
+            elevation = 0f
+        }
     }
 
     /** Language selection spinner */
@@ -81,8 +105,14 @@ class CaptionOverlay @JvmOverloads constructor(
         }
         this.adapter = adapter
         
+        // Prevent initial selection from firing a broadcast
+        var initializing = true
         onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                if (initializing) {
+                    initializing = false
+                    return
+                }
                 val languageCodes = resources.getStringArray(R.array.language_codes)
                 // Broadcast language change
                 context.sendBroadcast(
@@ -99,7 +129,13 @@ class CaptionOverlay @JvmOverloads constructor(
 
     /** Close button with trash can icon */
     private val closeButton = ImageButton(context).apply {
-        setImageResource(android.R.drawable.ic_menu_delete)
+        setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
+        contentDescription = context.getString(R.string.close_overlay)
+        // Borderless ripple for icon buttons
+        val attrs = intArrayOf(android.R.attr.selectableItemBackgroundBorderless)
+        val ta = context.obtainStyledAttributes(attrs)
+        foreground = ta.getDrawable(0)
+        ta.recycle()
         background = null
         setPadding(8.dp, 8.dp, 8.dp, 8.dp)
         setOnClickListener {
@@ -158,9 +194,16 @@ class CaptionOverlay @JvmOverloads constructor(
             LayoutParams.WRAP_CONTENT
         ))
 
-        background = ContextCompat.getDrawable(context, R.drawable.caption_bg)
-        setPadding(12.dp, 6.dp, 12.dp, 6.dp)   // keep text off the edge
+        applyMaterialBackground()
+        setPadding(0, 0, 0, 0)
         clipToOutline = true
+        isClickable = true
+        isFocusable = false
+        // Ripple on tap to match Android components
+        val attrs = intArrayOf(android.R.attr.selectableItemBackground)
+        val ta = context.obtainStyledAttributes(attrs)
+        foreground = ta.getDrawable(0)
+        ta.recycle()
 
         // Handle taps on the overlay
         setOnClickListener {
@@ -170,6 +213,57 @@ class CaptionOverlay @JvmOverloads constructor(
                 showControls()
             }
         }
+
+        // Initialize spinner selection from the saved source language (if available)
+        try {
+            val prefs: SharedPreferences = context.getSharedPreferences("TranslateOverlayPrefs", Context.MODE_PRIVATE)
+            val saved = prefs.getString("sourceLanguage", null)
+            if (!saved.isNullOrEmpty()) {
+                val codes = resources.getStringArray(R.array.language_codes)
+                val idx = codes.indexOf(saved)
+                if (idx >= 0) {
+                    languageSpinner.setSelection(idx, false)
+                }
+            }
+        } catch (_: Exception) {
+            // ignore; leave default selection
+        }
+
+        // No width tracking needed; TextView handles wrapping.
+
+        // Add a subtle bottom-right resize affordance (visual only; resizing handled by parent touch listener)
+        val outlineColor = MaterialColors.getColor(this, com.google.android.material.R.attr.colorOutline)
+        val handle = ImageView(context).apply {
+            setImageResource(android.R.drawable.ic_menu_crop)
+            imageAlpha = 140
+            setColorFilter(outlineColor)
+            importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        addView(handle, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
+            gravity = Gravity.BOTTOM or Gravity.END
+            marginEnd = 6.dp
+            bottomMargin = 6.dp
+        })
+    }
+
+    private fun applyMaterialBackground() {
+        val corner = 12.dp.toFloat()
+        val shape = ShapeAppearanceModel.builder()
+            .setAllCornerSizes(corner)
+            .build()
+
+        val surface = MaterialColors.getColor(this, com.google.android.material.R.attr.colorSurface)
+        val outline = MaterialColors.getColor(this, com.google.android.material.R.attr.colorOutline)
+
+        background = MaterialShapeDrawable(shape).apply {
+            // Slightly translucent surface to let content show subtly
+            val bg = (surface and 0x00FFFFFF) or (0xE5 shl 24) // ~90% alpha
+            setTint(bg)
+            setStroke(1f, outline and 0x33FFFFFF)
+            initializeElevationOverlay(context)
+            elevation = 8f
+        }
+        ViewCompat.setElevation(this, 8.dp.toFloat())
     }
 
     private fun showControls() {
@@ -215,7 +309,7 @@ class CaptionOverlay @JvmOverloads constructor(
             }
         } else {
             val delta = extractDelta(full)
-            wrapAndPush(delta)
+            processIncoming(delta)
             redraw()
         }
     }
@@ -260,7 +354,7 @@ class CaptionOverlay @JvmOverloads constructor(
      * Completed lines are appended to the ring; any final partial word fragment
      * is left hanging until its line is complete on a later call.
      */
-    private fun wrapAndPush(text: String) {
+    private fun processIncoming(text: String) {
         if (text.isBlank()) return
 
         // Ensure a single boundary space when concatenating chunks mid-line
@@ -273,22 +367,24 @@ class CaptionOverlay @JvmOverloads constructor(
 
         currentLine.append(text)
 
-        val widthPx = resources.displayMetrics.widthPixels * 0.8f
-
-        while (true) {
-            val line = currentLine.toString()
-            val fit  = paint.breakText(line, 0, line.length, true, widthPx, null)
-            if (fit == line.length) break          // whole thing still fits → stop
-
-            var end = fit
-            val lastSpace = line.lastIndexOf(' ', fit - 1)
-            if (lastSpace >= 0) end = lastSpace + 1   // keep words intact
-
-            val completed = line.substring(0, end).trim()
-            if (completed.isNotEmpty()) pushLine(completed)
-
-            currentLine.delete(0, end)               // remove wrapped part
+        // Split on natural sentence boundaries rather than width.
+        var start = 0
+        val s = currentLine.toString()
+        for (i in s.indices) {
+            val c = s[i]
+            val isDelim = when (c) {
+                '.', '!', '?', '。', '！', '？', '…', '\n' -> true
+                else -> false
+            }
+            if (isDelim) {
+                val seg = s.substring(start, i + 1).trim()
+                if (seg.isNotEmpty()) pushLine(seg)
+                start = i + 1
+            }
         }
+        // Keep any trailing fragment in currentLine
+        currentLine.clear()
+        if (start < s.length) currentLine.append(s.substring(start))
     }
 
     private fun pushLine(line: String) {
@@ -310,4 +406,6 @@ class CaptionOverlay @JvmOverloads constructor(
     private fun runOnMain(block: () -> Unit) {
         Handler(Looper.getMainLooper()).post(block)
     }
+
+    // No reflow needed on width change; TextView handles layout.
 }

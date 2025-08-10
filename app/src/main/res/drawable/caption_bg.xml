@@ -1,12 +1,12 @@
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
 
-    <!-- 70%‑opaque black -->
-    <solid android:color="#B3000000"/>   <!-- 0xB3 = 179 / 255 ≈ 70% -->
+    <!-- Semi-opaque dark backdrop for legacy fallback -->
+    <solid android:color="#E5000000"/>
 
-    <!-- 12dp rounded corners -->
-    <corners android:radius="4dp" />
+    <!-- Rounded corners to match Material -->
+    <corners android:radius="12dp" />
 
-    <!-- Optional: thin white stroke for readability -->
-    <!-- <stroke android:width="1dp" android:color="#40FFFFFF"/> -->
+    <!-- Subtle stroke for contrast -->
+    <stroke android:width="1dp" android:color="#33FFFFFF"/>
 </shape>
