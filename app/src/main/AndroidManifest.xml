@@ -10,7 +10,7 @@
 
     <application
         android:allowBackup="true"
-        android:label="TranslateOverlay"
+        android:label="@string/app_name"
         android:theme="@style/Theme.TranslateOverlay"
         android:usesCleartextTraffic="false">
 
