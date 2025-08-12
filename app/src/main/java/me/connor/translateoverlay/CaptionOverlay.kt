@@ -11,11 +11,14 @@ import android.os.Looper
 import android.text.Layout
 import android.text.TextPaint
 import android.util.AttributeSet
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.widget.*
 import android.content.SharedPreferences
+import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.widget.TextViewCompat
@@ -72,6 +75,11 @@ class CaptionOverlay @JvmOverloads constructor(
             breakStrategy = Layout.BREAK_STRATEGY_BALANCED
         }
     }
+    // Backing background so we can live-tune opacity
+    private var overlayBackground: MaterialShapeDrawable? = null
+    private var overlaySurfaceBaseColor: Int = 0
+    private var overlayAlphaPercent: Int = 90
+
 
     // We no longer pre-wrap by width; let TextView wrap naturally.
 
@@ -79,7 +87,7 @@ class CaptionOverlay @JvmOverloads constructor(
     private val controlBar = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        setPadding(8.dp, 6.dp, 8.dp, 6.dp)
+        setPadding(8.dp, 4.dp, 8.dp, 6.dp)
         visibility = View.GONE // Initially hidden
         // Subtle surface-variant chip-like bar
         val surfaceVariant = MaterialColors.getColor(this, com.google.android.material.R.attr.colorSurfaceVariant)
@@ -99,14 +107,31 @@ class CaptionOverlay @JvmOverloads constructor(
         val adapter = ArrayAdapter.createFromResource(
             context,
             R.array.language_names,
-            android.R.layout.simple_spinner_item
+            R.layout.spinner_item_small
         ).apply {
-            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            setDropDownViewResource(R.layout.spinner_dropdown_item_small)
         }
         this.adapter = adapter
+        minimumHeight = 36.dp
+        setPadding(10.dp, 4.dp, 10.dp, 4.dp)
         
         // Prevent initial selection from firing a broadcast
         var initializing = true
+        setOnTouchListener { _, event ->
+            if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                isInteractingWithControls = true
+                isSpinnerOpen = true
+                showControls()
+            }
+            false
+        }
+        setOnFocusChangeListener { _, hasFocus ->
+            isInteractingWithControls = hasFocus
+            if (!hasFocus) {
+                // Resume auto-hide when focus leaves
+                isSpinnerOpen = false
+            }
+        }
         onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 if (initializing) {
@@ -121,23 +146,30 @@ class CaptionOverlay @JvmOverloads constructor(
                         .setPackage(context.packageName)
                 )
                 // Keep controls visible while interacting
-                resetAutoHide()
+                isSpinnerOpen = false
+                // Allow a short grace period after selection before auto-hide resumes
+                isInteractingWithControls = false
             }
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
     }
 
-    /** Close button with trash can icon */
+    /** Close button */
     private val closeButton = ImageButton(context).apply {
-        setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
+        setImageResource(R.drawable.ic_close_24)
         contentDescription = context.getString(R.string.close_overlay)
         // Borderless ripple for icon buttons
-        val attrs = intArrayOf(android.R.attr.selectableItemBackgroundBorderless)
-        val ta = context.obtainStyledAttributes(attrs)
+        val borderlessRippleAttrs = intArrayOf(android.R.attr.selectableItemBackgroundBorderless)
+        val ta = context.obtainStyledAttributes(borderlessRippleAttrs)
         foreground = ta.getDrawable(0)
         ta.recycle()
         background = null
-        setPadding(8.dp, 8.dp, 8.dp, 8.dp)
+        minimumWidth = 36.dp
+        minimumHeight = 36.dp
+        scaleType = ImageView.ScaleType.CENTER_INSIDE
+        setPadding(6.dp, 6.dp, 6.dp, 6.dp)
+        // Let the vector define its tint via attribute
+        imageTintList = null
         setOnClickListener {
             // Stop all services and remove overlay
             context.sendBroadcast(
@@ -150,25 +182,30 @@ class CaptionOverlay @JvmOverloads constructor(
     /** Running *full* transcript received from the ASR engine last time we updated. */
     private var prev: String = ""
 
-    /** Handler for auto-hiding controls */
-    private val hideHandler = Handler(Looper.getMainLooper())
-    private val hideRunnable = Runnable { hideControls() }
-    private val AUTO_HIDE_DELAY = 3000L // 3 seconds
+    /** Whether the user is currently interacting with the control bar */
+    private var isInteractingWithControls: Boolean = false
+
+    /** Whether the spinner dropdown is currently open */
+    private var isSpinnerOpen: Boolean = false
 
     /** If true, broadcast a stop request when this view detaches (used for STT overlay). */
     var stopServicesOnDetach: Boolean = false
 
     init {
+        // Load user settings
+        try {
+            val settings = context.getSharedPreferences("TranslateOverlayPrefs", Context.MODE_PRIVATE)
+            overlayAlphaPercent = settings.getInt("overlayBgAlpha", 90).coerceIn(60, 100)
+            val textSizeSp = settings.getFloat("captionTextSizeSp", 0f)
+            if (textSizeSp > 0f) {
+                tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp)
+            }
+        } catch (_: Exception) {}
+
         // Create a vertical layout to hold text and controls
         val contentLayout = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
         }
-
-        // Add text view first
-        contentLayout.addView(tv, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        ))
 
         // Add controls to the control bar
         controlBar.addView(languageSpinner, LinearLayout.LayoutParams(
@@ -176,13 +213,18 @@ class CaptionOverlay @JvmOverloads constructor(
             LinearLayout.LayoutParams.WRAP_CONTENT,
             1f  // take up remaining space
         ))
-        
         controlBar.addView(closeButton, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ))
 
-        // Add control bar at the bottom
+        // Add text view first
+        contentLayout.addView(tv, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+
+        // Place control bar at the BOTTOM
         contentLayout.addView(controlBar, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
@@ -200,10 +242,10 @@ class CaptionOverlay @JvmOverloads constructor(
         isClickable = true
         isFocusable = false
         // Ripple on tap to match Android components
-        val attrs = intArrayOf(android.R.attr.selectableItemBackground)
-        val ta = context.obtainStyledAttributes(attrs)
-        foreground = ta.getDrawable(0)
-        ta.recycle()
+        val rippleAttrs = intArrayOf(android.R.attr.selectableItemBackground)
+        val overlayAttrsTa = context.obtainStyledAttributes(rippleAttrs)
+        foreground = overlayAttrsTa.getDrawable(0)
+        overlayAttrsTa.recycle()
 
         // Handle taps on the overlay
         setOnClickListener {
@@ -212,6 +254,12 @@ class CaptionOverlay @JvmOverloads constructor(
             } else {
                 showControls()
             }
+        }
+
+        // Long-press to open quick settings
+        setOnLongClickListener {
+            showQuickSettingsDialog()
+            true
         }
 
         // Initialize spinner selection from the saved source language (if available)
@@ -231,19 +279,7 @@ class CaptionOverlay @JvmOverloads constructor(
 
         // No width tracking needed; TextView handles wrapping.
 
-        // Add a subtle bottom-right resize affordance (visual only; resizing handled by parent touch listener)
-        val outlineColor = MaterialColors.getColor(this, com.google.android.material.R.attr.colorOutline)
-        val handle = ImageView(context).apply {
-            setImageResource(android.R.drawable.ic_menu_crop)
-            imageAlpha = 140
-            setColorFilter(outlineColor)
-            importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        }
-        addView(handle, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
-            gravity = Gravity.BOTTOM or Gravity.END
-            marginEnd = 6.dp
-            bottomMargin = 6.dp
-        })
+        // Resize affordance removed: static width overlay
     }
 
     private fun applyMaterialBackground() {
@@ -255,35 +291,29 @@ class CaptionOverlay @JvmOverloads constructor(
         val surface = MaterialColors.getColor(this, com.google.android.material.R.attr.colorSurface)
         val outline = MaterialColors.getColor(this, com.google.android.material.R.attr.colorOutline)
 
-        background = MaterialShapeDrawable(shape).apply {
-            // Slightly translucent surface to let content show subtly
-            val bg = (surface and 0x00FFFFFF) or (0xE5 shl 24) // ~90% alpha
-            setTint(bg)
+        overlaySurfaceBaseColor = surface and 0x00FFFFFF
+        overlayBackground = MaterialShapeDrawable(shape).apply {
+            setTint(applyAlphaToColor(overlaySurfaceBaseColor, overlayAlphaPercent))
             setStroke(1f, outline and 0x33FFFFFF)
             initializeElevationOverlay(context)
             elevation = 8f
         }
+        background = overlayBackground
         ViewCompat.setElevation(this, 8.dp.toFloat())
     }
 
     private fun showControls() {
         controlBar.visibility = View.VISIBLE
-        resetAutoHide()
     }
 
     private fun hideControls() {
+        if (isInteractingWithControls || isSpinnerOpen) return
         controlBar.visibility = View.GONE
-        hideHandler.removeCallbacks(hideRunnable)
     }
-
-    private fun resetAutoHide() {
-        hideHandler.removeCallbacks(hideRunnable)
-        hideHandler.postDelayed(hideRunnable, AUTO_HIDE_DELAY)
-    }
+    
 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
-        hideHandler.removeCallbacks(hideRunnable)
         if (stopServicesOnDetach) {
             // Ensure services are stopped if STT overlay is removed or dismissed by the system
             context.sendBroadcast(
@@ -400,11 +430,116 @@ class CaptionOverlay @JvmOverloads constructor(
         if (currentLine.isNotBlank()) lines += currentLine.toString()
 
         // keep at most 3 lines visible
-        runOnMain { tv.text = lines.takeLast(maxVisibleLines).joinToString("\n") }
+        runOnMain {
+            val text = lines.takeLast(maxVisibleLines).joinToString("\n")
+            if (tv.text.toString() != text) {
+                tv.alpha = 0.94f
+                tv.text = text
+                tv.animate().alpha(1f).setDuration(120).start()
+            }
+        }
     }
 
     private fun runOnMain(block: () -> Unit) {
         Handler(Looper.getMainLooper()).post(block)
+    }
+
+    // Pin button removed
+
+    /** Returns true if the raw screen point lies within the control bar bounds. */
+    fun isPointInControlBar(rawX: Int, rawY: Int): Boolean {
+        val loc = IntArray(2)
+        controlBar.getLocationOnScreen(loc)
+        val left = loc[0]
+        val top = loc[1]
+        val right = left + controlBar.width
+        val bottom = top + controlBar.height
+        return rawX >= left && rawX <= right && rawY >= top && rawY <= bottom && controlBar.visibility == View.VISIBLE
+    }
+
+    private fun applyAlphaToColor(rgb: Int, percent: Int): Int {
+        val alpha = (percent.coerceIn(0, 100) * 255 / 100)
+        return (alpha shl 24) or (rgb and 0x00FFFFFF)
+    }
+
+    private fun showQuickSettingsDialog() {
+        val context = this.context
+        val padding = 16.dp
+        val container = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(padding, padding, padding, padding)
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+        }
+
+        // Text size controls
+        val minSp = 14
+        val maxSp = 28
+        val currentSp = pxToSp(tv.textSize).toInt().coerceIn(minSp, maxSp)
+        val textSizeLabel = TextView(context).apply { text = context.getString(R.string.settings_text_size) }
+        val textSeek = SeekBar(context).apply {
+            max = maxSp - minSp
+            progress = currentSp - minSp
+        }
+        textSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val sp = (minSp + progress).toFloat()
+                tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                saveTextSize(pxToSp(tv.textSize))
+            }
+        })
+
+        // Opacity controls
+        val opacityLabel = TextView(context).apply { text = context.getString(R.string.settings_bg_opacity) }
+        val opacitySeek = SeekBar(context).apply {
+            min = 60
+            max = 100
+            progress = overlayAlphaPercent.coerceIn(60, 100)
+        }
+        opacitySeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                overlayAlphaPercent = progress
+                overlayBackground?.setTint(applyAlphaToColor(overlaySurfaceBaseColor, overlayAlphaPercent))
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                saveOverlayAlpha(overlayAlphaPercent)
+            }
+        })
+
+        container.addView(textSizeLabel)
+        container.addView(textSeek, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        container.addView(opacityLabel)
+        container.addView(opacitySeek, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        AlertDialog.Builder(context)
+            .setTitle(R.string.settings_title)
+            .setView(container)
+            .setNeutralButton(R.string.reset_position) { _, _ ->
+                context.sendBroadcast(Intent(FloatingOverlay.ACTION_RESET_OVERLAY_POSITION).setPackage(context.packageName))
+            }
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
+    }
+
+    private fun pxToSp(px: Float): Float {
+        return px / resources.displayMetrics.scaledDensity
+    }
+
+    private fun saveTextSize(sp: Float) {
+        try {
+            val settings = context.getSharedPreferences("TranslateOverlayPrefs", Context.MODE_PRIVATE)
+            settings.edit().putFloat("captionTextSizeSp", sp).apply()
+        } catch (_: Exception) {}
+    }
+
+    private fun saveOverlayAlpha(percent: Int) {
+        try {
+            val settings = context.getSharedPreferences("TranslateOverlayPrefs", Context.MODE_PRIVATE)
+            settings.edit().putInt("overlayBgAlpha", percent).apply()
+        } catch (_: Exception) {}
     }
 
     // No reflow needed on width change; TextView handles layout.

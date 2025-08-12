@@ -1,6 +1,10 @@
 <resources>
     <string name="app_name">TranslateOverlay</string>
     <string name="close_overlay">Close overlay</string>
+    <string name="settings_title">Overlay settings</string>
+    <string name="settings_text_size">Text size</string>
+    <string name="settings_bg_opacity">Background opacity (%)</string>
+    <string name="reset_position">Reset position</string>
     <string-array name="language_names">
         <item>English</item>
         <item>Spanish</item>
