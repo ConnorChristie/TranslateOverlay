@@ -67,20 +67,7 @@
                         app:icon="@android:drawable/ic_menu_view"
                         android:layout_marginBottom="16dp"/>
 
-                    <TextView
-                        android:id="@+id/accessibilityStatus"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Accessibility service: unknown"
-                        android:textAppearance="?attr/textAppearanceBodyMedium"
-                        android:layout_marginBottom="8dp"/>
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/requestAccessibilityBtn"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="Enable Accessibility Service"
-                        app:icon="@android:drawable/ic_menu_manage"/>
+                    
 
                 </LinearLayout>
 

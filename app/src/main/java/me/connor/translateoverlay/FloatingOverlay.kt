@@ -44,13 +44,7 @@ class FloatingOverlay(private val context: Context) {
     private var lastTouchDownTime = 0L
     private var configChangeReceiver: BroadcastReceiver? = null
 
-    // receive translated text from your AccessibilityService
-    private val textUpdatedReceiver = object : BroadcastReceiver() {
-        override fun onReceive(ctx: Context?, intent: Intent?) {
-            intent?.getStringExtra("extracted_text")
-                ?.let { updateText(it, replace = true) }
-        }
-    }
+    // Accessibility overlay removed; no text updates via broadcast
 
     // receive stop services broadcast
     private val stopServicesReceiver = object : BroadcastReceiver() {
@@ -65,36 +59,26 @@ class FloatingOverlay(private val context: Context) {
     fun show(updateTextOnAccessibility: Boolean) {
         if (overlayView != null) return
 
-        if (updateTextOnAccessibility) {
-            val filter = IntentFilter(ACTION_TEXT_UPDATED)
-            ContextCompat.registerReceiver(
-                context,
-                textUpdatedReceiver,
-                filter,
-                ContextCompat.RECEIVER_NOT_EXPORTED
-            )
-        }
+        
 
         // Register for stop services broadcast ONLY for accessibility overlay.
         // For the STT overlay owned by a Service, the Service handles stop and removes the overlay.
-        if (updateTextOnAccessibility) {
-            val stopFilter = IntentFilter().apply {
-                addAction(ACTION_STOP_SERVICES)
-                addAction(ACTION_RESET_OVERLAY_POSITION)
-            }
-            ContextCompat.registerReceiver(
-                context,
-                stopServicesReceiver,
-                stopFilter,
-                ContextCompat.RECEIVER_NOT_EXPORTED
-            )
+        val stopFilter = IntentFilter().apply {
+            addAction(ACTION_STOP_SERVICES)
+            addAction(ACTION_RESET_OVERLAY_POSITION)
         }
+        ContextCompat.registerReceiver(
+            context,
+            stopServicesReceiver,
+            stopFilter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
 
         val themedContext = ContextThemeWrapper(context, R.style.Theme_TranslateOverlay)
         overlayView = CaptionOverlay(themedContext).apply {
             // If this is the STT overlay (not the accessibility drag overlay),
             // stop services when the view detaches (dismissed or removed).
-            stopServicesOnDetach = !updateTextOnAccessibility
+            stopServicesOnDetach = true
             setOnTouchListener(CombinedTouchListener())
         }
 
@@ -144,7 +128,6 @@ class FloatingOverlay(private val context: Context) {
         overlayView?.let {
             windowManager.removeView(it)
             try {
-                context.unregisterReceiver(textUpdatedReceiver)
                 context.unregisterReceiver(stopServicesReceiver)
                 configChangeReceiver?.let { r -> context.unregisterReceiver(r) }
             } catch (e: IllegalArgumentException) {

@@ -22,7 +22,7 @@ import com.google.mlkit.nl.translate.TranslateLanguage
 
 class MainActivity : AppCompatActivity() {
     private lateinit var overlayStatus: TextView
-    private lateinit var accessibilityStatus: TextView
+    
     private lateinit var requestOverlayBtn: MaterialButton
     private lateinit var requestAccessibilityBtn: MaterialButton
     private lateinit var overlay: FloatingOverlay
@@ -118,9 +118,7 @@ class MainActivity : AppCompatActivity() {
 
         overlay = FloatingOverlay(this)
         overlayStatus = findViewById(R.id.overlayStatus)
-        accessibilityStatus = findViewById(R.id.accessibilityStatus)
         requestOverlayBtn = findViewById(R.id.requestOverlayBtn)
-        requestAccessibilityBtn = findViewById(R.id.requestAccessibilityBtn)
         sourceLanguageSpinner = findViewById(R.id.sourceLanguageSpinner)
         targetLanguageSpinner = findViewById(R.id.targetLanguageSpinner)
         showOverlayBtn = findViewById(R.id.showOverlayBtn)
@@ -138,9 +136,7 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
-        requestAccessibilityBtn.setOnClickListener {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        }
+        
 
         startTranscriptionBtn.setOnClickListener {
             if (!isTranscriptionRunning) {
@@ -233,7 +229,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         updateOverlayStatus()
-        updateAccessibilityStatus()
+        
         // Update overlay state based on actual overlay status
         isOverlayShown = overlay.isShown()
         // Check if transcription service is running
@@ -258,25 +254,7 @@ class MainActivity : AppCompatActivity() {
                 if (granted) "ENABLED ✅" else "NOT ENABLED ❌"
     }
 
-    private fun updateAccessibilityStatus() {
-        val enabled = Settings.Secure.getInt(
-            contentResolver,
-            Settings.Secure.ACCESSIBILITY_ENABLED, 0
-        ) == 1
-
-        val services = Settings.Secure.getString(
-            contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: ""
-
-        val myService = "$packageName/${TextAccessibilityService::class.java.name}"
-        val accEnabled = enabled && services
-            .split(':')
-            .any { it.equals(myService, ignoreCase = true) }
-
-        accessibilityStatus.text = "Accessibility service: " +
-                if (accEnabled) "ENABLED ✅" else "NOT ENABLED ❌"
-    }
+    
 
     private fun updateButtonStates() {
         startTranscriptionBtn.text = if (isTranscriptionRunning) "Stop Transcription" else "Start Transcription"
