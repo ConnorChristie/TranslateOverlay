@@ -64,6 +64,14 @@ class AudioCaptureService : Service() {
     // OpenAI sentence/partial buffering to mirror Sherpa flow
     private val openAIBuffer = StringBuilder()
 
+    // Sherpa restart/backoff controls
+    private var sherpaRestartAttempts = 0
+    private var sherpaLastRestartMs = 0L
+    private val SHERPA_RESTART_BACKOFF_MS = 2_000L
+    private val SHERPA_RESTART_WINDOW_MS = 10_000L
+    private val SHERPA_MAX_RESTARTS_IN_WINDOW = 3
+    private var currentSampleRate: Int = 16_000
+
     private val stopServiceReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == FloatingOverlay.ACTION_STOP_SERVICES) {
@@ -135,6 +143,7 @@ class AudioCaptureService : Service() {
             .build()
 
         val sampleRate = 16000
+        currentSampleRate = sampleRate
         val bufferSize = AudioRecord.getMinBufferSize(
             sampleRate,
             AudioFormat.CHANNEL_IN_MONO,
@@ -201,12 +210,24 @@ class AudioCaptureService : Service() {
     }
 
     private fun processAudioLoop(sampleRate: Int) {
-        val buffer = ShortArray(1024)
-        val engine = sttEngine
-        while (running && recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING && engine != null) {
-            val read = recorder.read(buffer, 0, buffer.size)
-            if (read > 0) engine.acceptPcm16(buffer, read, sampleRate)
-            Thread.sleep(20)
+        val frameSize = (sampleRate / 1000) * 20
+        val buffer = ShortArray(if (frameSize > 0) frameSize else 320)
+        while (running && recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+            val read = try { recorder.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING) } catch (e: Exception) {
+                Log.e(TAG, "AudioRecord read error", e)
+                -1
+            }
+            if (read <= 0) continue
+            val engine = sttEngine
+            if (engine == null) {
+                // Engine not ready yet; drop this frame to avoid backpressure
+                continue
+            }
+            try {
+                engine.acceptPcm16(buffer, read, sampleRate)
+            } catch (e: Exception) {
+                Log.e(TAG, "Engine acceptPcm16 error", e)
+            }
         }
     }
 
@@ -244,20 +265,61 @@ class AudioCaptureService : Service() {
         }
 
         try {
-            sttEngine = me.connor.translateoverlay.stt.SherpaSttEngine(am).also { engine ->
-                engine.start(object : me.connor.translateoverlay.stt.SpeechToTextEngine.Listener {
-                    override fun onFinal(text: String) {
-                        handleFinalSentence(text)
-                    }
-                    override fun onError(message: String) {
-                        Log.e(TAG, "Sherpa error: $message")
-                    }
-                })
-            }
+            createSherpaEngine(sampleRate)
             recorder.startRecording()
             executor.execute { processAudioLoop(sampleRate) }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize Sherpa components", e)
+        }
+    }
+
+    private fun createSherpaEngine(sampleRate: Int) {
+        val am = applicationContext.assets
+        sttEngine = me.connor.translateoverlay.stt.SherpaSttEngine(
+            assets = am,
+            defaultSampleRate = sampleRate,
+            sourceLanguageCode = sourceLanguage
+        ).also { engine ->
+            engine.start(object : me.connor.translateoverlay.stt.SpeechToTextEngine.Listener {
+                override fun onFinal(text: String) {
+                    handleFinalSentence(text)
+                }
+                override fun onError(message: String) {
+                    Log.e(TAG, "Sherpa error: $message")
+                    scheduleSherpaRestart(reason = message)
+                }
+                override fun onStatus(connected: Boolean) {
+                    Log.i(TAG, "Sherpa status: $connected")
+                }
+            })
+        }
+    }
+
+    private fun scheduleSherpaRestart(reason: String) {
+        val now = System.currentTimeMillis()
+        if (now - sherpaLastRestartMs > SHERPA_RESTART_WINDOW_MS) {
+            sherpaRestartAttempts = 0
+        }
+        if (now - sherpaLastRestartMs < SHERPA_RESTART_BACKOFF_MS) {
+            Log.w(TAG, "Restart suppressed due to backoff ($reason)")
+            return
+        }
+        if (sherpaRestartAttempts >= SHERPA_MAX_RESTARTS_IN_WINDOW) {
+            Log.e(TAG, "Too many Sherpa restarts in window; cooling down")
+            return
+        }
+        sherpaRestartAttempts += 1
+        sherpaLastRestartMs = now
+        executor.execute {
+            try {
+                Log.w(TAG, "Restarting Sherpa engine due to: $reason")
+                sttEngine?.stop()
+                sttEngine = null
+                // Do not touch recorder or processing loop; just recreate engine
+                createSherpaEngine(currentSampleRate)
+            } catch (e: Exception) {
+                Log.e(TAG, "Sherpa restart failed", e)
+            }
         }
     }
 
