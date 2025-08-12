@@ -31,47 +31,7 @@
             android:orientation="vertical"
             android:padding="16dp">
 
-            <!-- Permissions Card -->
-            <com.google.android.material.card.MaterialCardView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="16dp"
-                app:cardElevation="1dp">
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="16dp">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Required Permissions"
-                        android:textAppearance="?attr/textAppearanceTitleMedium"
-                        android:layout_marginBottom="16dp"/>
-
-                    <TextView
-                        android:id="@+id/overlayStatus"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Overlay permission: unknown"
-                        android:textAppearance="?attr/textAppearanceBodyMedium"
-                        android:layout_marginBottom="8dp"/>
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/requestOverlayBtn"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="Enable Overlay Permission"
-                        app:icon="@android:drawable/ic_menu_view"
-                        android:layout_marginBottom="16dp"/>
-
-                    
-
-                </LinearLayout>
-
-            </com.google.android.material.card.MaterialCardView>
+            
 
             <!-- Language Settings Card -->
             <com.google.android.material.card.MaterialCardView
@@ -141,7 +101,7 @@
 
             
 
-            <!-- Actions Card -->
+            <!-- Primary Action Card -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -153,27 +113,20 @@
                     android:orientation="vertical"
                     android:padding="16dp">
 
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Actions"
-                        android:textAppearance="?attr/textAppearanceTitleMedium"
-                        android:layout_marginBottom="16dp"/>
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/showOverlayBtn"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="Show Overlay"
-                        app:icon="@android:drawable/ic_menu_slideshow"
-                        android:layout_marginBottom="8dp"/>
-
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/startTranscriptionBtn"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="Start Transcription"
-                        app:icon="@android:drawable/ic_btn_speak_now"/>
+                        android:text="Start Translating"
+                        app:icon="@android:drawable/ic_btn_speak_now"
+                        android:layout_marginBottom="12dp"/>
+
+                    <TextView
+                        android:id="@+id/statusText"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Ready"
+                        android:textAppearance="?attr/textAppearanceBodySmall"/>
 
                 </LinearLayout>
 

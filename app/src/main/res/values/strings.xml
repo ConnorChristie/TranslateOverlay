@@ -6,23 +6,19 @@
     <string name="settings_bg_opacity">Background opacity (%)</string>
     <string name="reset_position">Reset position</string>
     <string-array name="language_names">
+        <item>Auto Detect</item>
+        <item>Chinese (Mandarin, 普通话)</item>
+        <item>Cantonese (粤语, 广东话)</item>
         <item>English</item>
-        <item>Spanish</item>
-        <item>Chinese (Simplified)</item>
-        <item>French</item>
-        <item>Korean</item>
-        <item>German</item>
-        <item>Japanese</item>
-        <item>Russian</item>
+        <item>Japanese (日本語)</item>
+        <item>Korean (한국어)</item>
     </string-array>
     <string-array name="language_codes">
-        <item>en</item>
-        <item>es</item>
+        <item>auto</item>
         <item>zh</item>
-        <item>fr</item>
-        <item>ko</item>
-        <item>de</item>
+        <item>yue</item>
+        <item>en</item>
         <item>ja</item>
-        <item>ru</item>
+        <item>ko</item>
     </string-array>
 </resources>

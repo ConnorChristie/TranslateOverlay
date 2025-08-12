@@ -24,15 +24,13 @@ class TranslatorService : Service() {
 
         // Use ML Kit's TranslateLanguage constants to ensure compatibility
         private val SUPPORTED_SOURCE_LANGUAGES = setOf(
-            AUTO_DETECT,  // Add auto-detect option
+            AUTO_DETECT,
             TranslateLanguage.ENGLISH,
-            TranslateLanguage.SPANISH,
             TranslateLanguage.CHINESE,
-            TranslateLanguage.FRENCH,
-            TranslateLanguage.KOREAN,
-            TranslateLanguage.GERMAN,
             TranslateLanguage.JAPANESE,
-            TranslateLanguage.RUSSIAN
+            TranslateLanguage.KOREAN,
+            // ML Kit does not provide a Cantonese constant; use language tag "yue" where detected
+            "yue"
         )
         private val SUPPORTED_TARGET_LANGUAGES = setOf(
             TranslateLanguage.ENGLISH,
@@ -52,7 +50,7 @@ class TranslatorService : Service() {
     // ML Kit components
     private lateinit var translator: Translator
     private lateinit var languageIdentifier: LanguageIdentifier
-    private var sourceLanguage: String = AUTO_DETECT  // Default to auto-detect
+    private var sourceLanguage: String = AUTO_DETECT
     private var targetLanguage: String = TranslateLanguage.ENGLISH  // Now dynamic
     private var lastDetectedLanguage: String? = null  // Set after first detection when using auto-detect
 
@@ -143,8 +141,10 @@ class TranslatorService : Service() {
                 translator.close()
             }
 
+            // Map Cantonese (yue) to Chinese for ML Kit translator
+            val mappedSourceLang = if (actualSourceLangOrNull == "yue") TranslateLanguage.CHINESE else actualSourceLangOrNull
             val options = TranslatorOptions.Builder()
-                .setSourceLanguage(actualSourceLangOrNull)
+                .setSourceLanguage(mappedSourceLang)
                 .setTargetLanguage(targetLanguage)
                 .build()
             translator = com.google.mlkit.nl.translate.Translation.getClient(options)

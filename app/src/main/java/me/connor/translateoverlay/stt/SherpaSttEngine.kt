@@ -38,6 +38,7 @@ class SherpaSttEngine(
         return when (code) {
             "en" -> "en"
             "zh" -> "zh"
+            "yue" -> "yue"
             "ko" -> "ko"
             "ja" -> "ja"
             "auto", "" -> "auto"

@@ -21,17 +21,17 @@ import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.google.mlkit.nl.translate.TranslateLanguage
 
 class MainActivity : AppCompatActivity() {
-    private lateinit var overlayStatus: TextView
     
-    private lateinit var requestOverlayBtn: MaterialButton
+    
     private lateinit var requestAccessibilityBtn: MaterialButton
     private lateinit var overlay: FloatingOverlay
     private lateinit var sourceLanguageSpinner: MaterialAutoCompleteTextView
     private lateinit var targetLanguageSpinner: MaterialAutoCompleteTextView
     private lateinit var scrollView: androidx.core.widget.NestedScrollView
     private lateinit var sharedPreferences: SharedPreferences
-    private lateinit var showOverlayBtn: MaterialButton
+    
     private lateinit var startTranscriptionBtn: MaterialButton
+    private lateinit var statusText: TextView
 
     private lateinit var mediaProjectionManager: MediaProjectionManager
 
@@ -71,20 +71,17 @@ class MainActivity : AppCompatActivity() {
         private const val PREFS_NAME = "TranslateOverlayPrefs"
         private const val PREF_SOURCE_LANG = "sourceLanguage"
         private const val PREF_TARGET_LANG = "targetLanguage"
-        private const val DEFAULT_SOURCE_LANG = TranslatorService.AUTO_DETECT  // Default to auto-detect
+        private const val DEFAULT_SOURCE_LANG = TranslatorService.AUTO_DETECT
         private const val DEFAULT_TARGET_LANG = TranslateLanguage.ENGLISH
         
-        // Available source languages - using ML Kit constants
+        // Available source languages - requested 5 plus Auto Detect option
         private val SOURCE_LANGUAGES = listOf(
             Language(TranslatorService.AUTO_DETECT, "Auto Detect"),
-            Language(TranslateLanguage.CHINESE, "Chinese (中文)"),
-            Language(TranslateLanguage.KOREAN, "Korean (한국어)"),
+            Language(TranslateLanguage.CHINESE, "Chinese (Mandarin, 普通话)"),
+            Language("yue", "Cantonese (粤语, 广东话)"),
             Language(TranslateLanguage.ENGLISH, "English"),
-            Language(TranslateLanguage.SPANISH, "Spanish (Español)"),
-            Language(TranslateLanguage.FRENCH, "French (Français)"),
-            Language(TranslateLanguage.GERMAN, "German (Deutsch)"),
             Language(TranslateLanguage.JAPANESE, "Japanese (日本語)"),
-            Language(TranslateLanguage.RUSSIAN, "Russian (Русский)")
+            Language(TranslateLanguage.KOREAN, "Korean (한국어)")
         )
 
         // Available target languages - using ML Kit constants
@@ -117,29 +114,32 @@ class MainActivity : AppCompatActivity() {
         
 
         overlay = FloatingOverlay(this)
-        overlayStatus = findViewById(R.id.overlayStatus)
-        requestOverlayBtn = findViewById(R.id.requestOverlayBtn)
         sourceLanguageSpinner = findViewById(R.id.sourceLanguageSpinner)
         targetLanguageSpinner = findViewById(R.id.targetLanguageSpinner)
-        showOverlayBtn = findViewById(R.id.showOverlayBtn)
         startTranscriptionBtn = findViewById(R.id.startTranscriptionBtn)
+        statusText = findViewById(R.id.statusText)
 
         setupLanguageSpinners()
         
 
-        requestOverlayBtn.setOnClickListener {
-            startActivity(
-                Intent(
-                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:$packageName")
-                )
-            )
-        }
+        // Streamlined: Auto-trigger overlay permission on first launch if not granted
+        maybeRequestOverlayPermissionOnFirstLaunch()
 
         
 
         startTranscriptionBtn.setOnClickListener {
             if (!isTranscriptionRunning) {
+                if (!Settings.canDrawOverlays(this)) {
+                    startActivity(
+                        Intent(
+                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:$packageName")
+                        )
+                    )
+                    statusText.text = "Overlay permission required"
+                    return@setOnClickListener
+                }
+                statusText.text = "Preparing…"
                 mediaProjectionManager = getSystemService(
                     Context.MEDIA_PROJECTION_SERVICE
                 ) as MediaProjectionManager
@@ -155,16 +155,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        showOverlayBtn.setOnClickListener {
-            if (!isOverlayShown) {
-                overlay.show(true)
-                isOverlayShown = true
-            } else {
-                overlay.remove()
-                isOverlayShown = false
-            }
-            updateButtonStates()
-        }
+        // 'Show Overlay' removed; overlay is managed by the service lifecycle
 
         // Register broadcast receiver for service status
         val filter = IntentFilter(FloatingOverlay.ACTION_STOP_SERVICES)
@@ -176,6 +167,19 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    private fun maybeRequestOverlayPermissionOnFirstLaunch() {
+        val hasShownOverlayPrompt = sharedPreferences.getBoolean("hasShownOverlayPrompt", false)
+        if (!Settings.canDrawOverlays(this) && !hasShownOverlayPrompt) {
+            sharedPreferences.edit().putBoolean("hasShownOverlayPrompt", true).apply()
+            startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
+            )
+        }
+    }
+
     private fun setupLanguageSpinners() {
         // Source language spinner
         val sourceAdapter = ArrayAdapter(
@@ -185,12 +189,13 @@ class MainActivity : AppCompatActivity() {
         )
         sourceLanguageSpinner.setAdapter(sourceAdapter)
 
-        // Set saved or default selection
+        // Set saved or default selection; fall back to English if saved is missing
         val savedSourceLang = sharedPreferences.getString(PREF_SOURCE_LANG, DEFAULT_SOURCE_LANG)
         val sourceIndex = SOURCE_LANGUAGES.indexOfFirst { it.code == savedSourceLang }
-        if (sourceIndex >= 0) {
-            sourceLanguageSpinner.setText(SOURCE_LANGUAGES[sourceIndex].displayName, false)
-            sourceLanguageSpinner.listSelection = sourceIndex
+        val initialIndex = if (sourceIndex >= 0) sourceIndex else SOURCE_LANGUAGES.indexOfFirst { it.code == TranslateLanguage.ENGLISH }
+        if (initialIndex >= 0) {
+            sourceLanguageSpinner.setText(SOURCE_LANGUAGES[initialIndex].displayName, false)
+            sourceLanguageSpinner.listSelection = initialIndex
         }
 
         // Save selection when changed
@@ -228,7 +233,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        updateOverlayStatus()
         
         // Update overlay state based on actual overlay status
         isOverlayShown = overlay.isShown()
@@ -248,17 +252,14 @@ class MainActivity : AppCompatActivity() {
         return false
     }
 
-    private fun updateOverlayStatus() {
-        val granted = Settings.canDrawOverlays(this)
-        overlayStatus.text = "Overlay permission: " +
-                if (granted) "ENABLED ✅" else "NOT ENABLED ❌"
-    }
-
     
 
     private fun updateButtonStates() {
-        startTranscriptionBtn.text = if (isTranscriptionRunning) "Stop Transcription" else "Start Transcription"
-        showOverlayBtn.text = if (isOverlayShown) "Hide Overlay" else "Show Overlay"
+        startTranscriptionBtn.text = if (isTranscriptionRunning) "Stop Translating" else "Start Translating"
+        // Disable language pickers while running
+        sourceLanguageSpinner.isEnabled = !isTranscriptionRunning
+        targetLanguageSpinner.isEnabled = !isTranscriptionRunning
+        statusText.text = if (isTranscriptionRunning) "Transcribing and translating…" else "Ready"
     }
 
     override fun onDestroy() {
