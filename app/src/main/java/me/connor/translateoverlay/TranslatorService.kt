@@ -184,88 +184,75 @@ class TranslatorService : Service() {
         input: String,
         callback: (result: String?) -> Unit
     ) {
-        // Don't translate if source and target are the same (except for auto-detect)
+        // If configured source and target match (no translation needed)
         if (sourceLanguage != AUTO_DETECT && sourceLanguage == targetLanguage) {
             callback(input)
             return
         }
 
-        // If auto-detect is enabled, prefer using the last detected language if available
-        if (sourceLanguage == AUTO_DETECT) {
-            if (lastDetectedLanguage != null && ::translator.isInitialized) {
-                translator.translate(input)
-                    .addOnSuccessListener { translatedText ->
-                        callback(translatedText)
-                    }
-                    .addOnFailureListener { e ->
-                        Log.e(TAG, "Translation failed for ${lastDetectedLanguage ?: "unknown"} -> $targetLanguage", e)
-                        callback(null)
-                    }
-                return
-            }
-            // Otherwise, identify language for the first time or after change
-            languageIdentifier.identifyLanguage(input)
-                .addOnSuccessListener { detectedLang ->
-                    if (detectedLang == targetLanguage) {
-                        // If detected language is the same as target, no need to translate
-                        callback(input)
-                        return@addOnSuccessListener
-                    }
+        // Identify per-segment language so we can skip translating
+        // text that is already in the target language (e.g., English).
+        languageIdentifier.identifyLanguage(input)
+            .addOnSuccessListener { detectedLang ->
+                val detected = if (detectedLang == "und") null else detectedLang
 
-                    // Update last detected language if it's supported
-                    if (detectedLang in SUPPORTED_SOURCE_LANGUAGES) {
-                        if (detectedLang != lastDetectedLanguage) {
-                            lastDetectedLanguage = detectedLang
-                            // Initialize or reinitialize translator with the detected language
+                // Short-circuit when the input is already in the target language
+                if (detected != null && detected == targetLanguage) {
+                    callback(input)
+                    return@addOnSuccessListener
+                }
+
+                if (sourceLanguage == AUTO_DETECT) {
+                    // Prepare translator for detected language
+                    if (detected != null && detected in SUPPORTED_SOURCE_LANGUAGES) {
+                        if (detected != lastDetectedLanguage) {
+                            lastDetectedLanguage = detected
                             updateLanguageAndTranslator(forceInit = true)
                         }
                     } else {
-                        // If detected language is not supported, use last known language
-                        Log.w(TAG, "Detected unsupported language: $detectedLang, falling back to ${lastDetectedLanguage ?: "unknown"}")
+                        Log.w(TAG, "Detected unsupported language: ${detected ?: "und"}")
                     }
 
-                    // Perform translation
                     if (!::translator.isInitialized) {
                         Log.w(TAG, "Translator not initialized yet; skipping translation this time")
                         callback(null)
                         return@addOnSuccessListener
                     }
+
                     translator.translate(input)
-                        .addOnSuccessListener { translatedText ->
-                            callback(translatedText)
-                        }
+                        .addOnSuccessListener { translatedText -> callback(translatedText) }
                         .addOnFailureListener { e ->
                             Log.e(TAG, "Translation failed for ${lastDetectedLanguage ?: "unknown"} -> $targetLanguage", e)
                             callback(null)
                         }
-                }
-                .addOnFailureListener { e ->
-                    Log.e(TAG, "Language detection failed", e)
-                    // Fall back to last known language
+                } else {
+                    // Known fixed source language; translate unless already target
                     if (!::translator.isInitialized) {
-                        Log.w(TAG, "Translator not initialized after detection failure; skipping translation")
+                        updateLanguageAndTranslator(forceInit = true)
+                        Log.w(TAG, "Translator not ready yet for $sourceLanguage -> $targetLanguage")
                         callback(null)
-                        return@addOnFailureListener
+                        return@addOnSuccessListener
                     }
                     translator.translate(input)
-                        .addOnSuccessListener { translatedText ->
-                            callback(translatedText)
-                        }
-                        .addOnFailureListener { e2 ->
-                            Log.e(TAG, "Translation failed for ${lastDetectedLanguage ?: "unknown"} -> $targetLanguage", e2)
+                        .addOnSuccessListener { translatedText -> callback(translatedText) }
+                        .addOnFailureListener { e ->
+                            Log.e(TAG, "Translation failed for $sourceLanguage -> $targetLanguage", e)
                             callback(null)
                         }
                 }
-        } else {
-            // Regular translation with known source language
-            translator.translate(input)
-                .addOnSuccessListener { translatedText ->
-                    callback(translatedText)
-                }
-                .addOnFailureListener { e ->
-                    Log.e(TAG, "Translation failed for $sourceLanguage -> $targetLanguage", e)
+            }
+            .addOnFailureListener { e ->
+                Log.e(TAG, "Language detection failed", e)
+                if (::translator.isInitialized) {
+                    translator.translate(input)
+                        .addOnSuccessListener { translatedText -> callback(translatedText) }
+                        .addOnFailureListener { err ->
+                            Log.e(TAG, "Translation failed after detection error", err)
+                            callback(null)
+                        }
+                } else {
                     callback(null)
                 }
-        }
+            }
     }
 }

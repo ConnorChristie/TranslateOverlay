@@ -5,6 +5,8 @@ import com.google.gson.Gson
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -16,8 +18,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 class OpenAIRealtimeService {
     companion object {
         private const val TAG = "OpenAIRealtimeService"
-        private const val OPENAI_API_URL = "https://api.openai.com/v1/realtime/transcription_sessions"
+        private const val OPENAI_API_URL = "https://api.openai.com/v1/realtime/sessions"
         private const val OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
+        private const val REALTIME_MODEL = "gpt-4o-mini-realtime-preview"
         private const val MAX_CONTEXT_SENTENCES = 2  // Keep last 2 sentences for context
     }
 
@@ -32,8 +35,11 @@ class OpenAIRealtimeService {
     
     private var onTranscriptionReceived: ((String) -> Unit)? = null
     private var onError: ((String) -> Unit)? = null
+    private var onPartial: ((String) -> Unit)? = null
     private var onConnectionStatusChanged: ((Boolean) -> Unit)? = null
     private var ephemeralToken: String? = null
+    private val inputSampleRate: Int = 24000
+    private val sendMutex = Mutex()
     
     // Context management
     private val recentSentences = mutableListOf<String>()
@@ -56,7 +62,7 @@ class OpenAIRealtimeService {
 
             // Send initial session configuration
             val sessionConfig = JsonObject().apply {
-                addProperty("type", "transcription_session.update")
+                addProperty("type", "session.update")
                 add("session", JsonObject().apply {
                     addProperty("input_audio_format", "pcm16")
                     add("input_audio_transcription", JsonObject().apply {
@@ -124,8 +130,14 @@ class OpenAIRealtimeService {
                     }
 
                     "error" -> {
-                        val error = jsonObject.getAsJsonObject("error")?.get("message")?.asString
-                        onError?.invoke(error ?: "Unknown error")
+                        val errObj = jsonObject.getAsJsonObject("error")
+                        val code = errObj?.get("code")?.asString
+                        val message = errObj?.get("message")?.asString ?: "Unknown error"
+                        if (code == "input_audio_buffer_commit_empty") {
+                            Log.d(TAG, "Ignoring empty commit warning from server: $message")
+                        } else {
+                            onError?.invoke(message)
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -161,6 +173,7 @@ class OpenAIRealtimeService {
 
     private suspend fun createTranscriptionSession(config: TranscriptionConfig): String {
         val payload = JsonObject().apply {
+            addProperty("model", REALTIME_MODEL)
             addProperty("input_audio_format", "pcm16")
             add("input_audio_transcription", JsonObject().apply {
                 addProperty("model", "gpt-4o-mini-transcribe")
@@ -181,16 +194,17 @@ class OpenAIRealtimeService {
             .url(OPENAI_API_URL)
             .addHeader("Authorization", "Bearer ${config.apiKey}")
             .addHeader("Content-Type", "application/json")
-            .addHeader("OpenAI-Beta", "assistants=v2")
+            .addHeader("OpenAI-Beta", "realtime=v1")
             .post(gson.toJson(payload).toRequestBody("application/json".toMediaTypeOrNull()))
             .build()
 
         return withContext(Dispatchers.IO) {
             client.newCall(request).execute().use { response ->
+                val responseBody = response.body?.string() ?: ""
                 if (!response.isSuccessful) {
+                    Log.e(TAG, "Ephemeral session creation failed: code=${response.code}, body=${responseBody}")
                     throw IOException("Failed to create transcription session: ${response.code}")
                 }
-                val responseBody = response.body?.string() ?: throw IOException("Empty response body")
                 val jsonResponse = gson.fromJson(responseBody, JsonObject::class.java)
                 jsonResponse.getAsJsonObject("client_secret").get("value").asString
             }
@@ -200,12 +214,14 @@ class OpenAIRealtimeService {
     suspend fun connectForTranscription(
         config: TranscriptionConfig,
         onTranscription: (String) -> Unit,
+        onPartial: (String) -> Unit = {},
         onError: (String) -> Unit,
         onConnectionStatus: (Boolean) -> Unit
     ) {
         this.onTranscriptionReceived = onTranscription
         this.onError = onError
         this.onConnectionStatusChanged = onConnectionStatus
+        this.onPartial = onPartial
 
         try {
             // First get the ephemeral token
@@ -213,7 +229,7 @@ class OpenAIRealtimeService {
 
             // Then connect to the WebSocket
             val request = Request.Builder()
-                .url(OPENAI_REALTIME_URL)
+                .url("$OPENAI_REALTIME_URL?model=$REALTIME_MODEL")
                 .addHeader("Authorization", "Bearer $ephemeralToken")
                 .addHeader("OpenAI-Beta", "realtime=v1")
                 .build()
@@ -232,16 +248,17 @@ class OpenAIRealtimeService {
 
         scope.launch {
             try {
-                // Convert audio data to base64
-                val base64Audio = android.util.Base64.encodeToString(audioData, android.util.Base64.NO_WRAP)
-                
-                // Send audio buffer append event
-                val message = JsonObject().apply {
-                    addProperty("type", "input_audio_buffer.append")
-                    addProperty("audio", base64Audio)
+                sendMutex.withLock {
+                    // Convert audio data to base64
+                    val base64Audio = android.util.Base64.encodeToString(audioData, android.util.Base64.NO_WRAP)
+                    // Send audio buffer append event
+                    val message = JsonObject().apply {
+                        addProperty("type", "input_audio_buffer.append")
+                        addProperty("audio", base64Audio)
+                    }
+                    webSocket?.send(gson.toJson(message))
+                    Log.d(TAG, "Append sent: bytes=${audioData.size}, b64Chars=${base64Audio.length}")
                 }
-                
-                webSocket?.send(gson.toJson(message))
             } catch (e: Exception) {
                 Log.e(TAG, "Error sending audio chunk", e)
                 onError?.invoke("Failed to send audio: ${e.message}")
@@ -282,6 +299,7 @@ class OpenAIRealtimeService {
                 val newSentence = fullText.substring(0, boundaryPos).trim()
                 
                 if (newSentence.isNotBlank()) {
+                    Log.d(TAG, "Completed sentence from delta: '${newSentence.take(120)}'")
                     // Add to recent sentences
                     recentSentences.add(newSentence)
                     while (recentSentences.size > MAX_CONTEXT_SENTENCES) {
@@ -298,8 +316,14 @@ class OpenAIRealtimeService {
             }
         }
         
-        // Update last processed index for the remaining text (do not emit partials without punctuation)
+        // Update last processed index for the remaining text
         lastProcessedIndex = currentDeltaText.length
+        // Emit current remainder as a partial preview (may be empty)
+        val remainder = currentDeltaText.toString().trim()
+        if (remainder.isNotEmpty()) {
+            Log.d(TAG, "Partial remainder now='${remainder.take(120)}'")
+            onPartial?.invoke(remainder)
+        }
     }
     
     private fun processCompletedTranscript(transcript: String) {
