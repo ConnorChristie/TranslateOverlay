@@ -152,43 +152,7 @@
 
             </com.google.android.material.card.MaterialCardView>
 
-            <!-- OpenAI Configuration Card -->
-            <com.google.android.material.card.MaterialCardView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="16dp"
-                app:cardElevation="1dp">
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="16dp">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="OpenAI Configuration"
-                        android:textAppearance="?attr/textAppearanceTitleMedium"
-                        android:layout_marginBottom="16dp"/>
-
-                    <com.google.android.material.switchmaterial.SwitchMaterial
-                        android:id="@+id/useOpenAISwitch"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="Use OpenAI Realtime API"
-                        android:layout_marginBottom="16dp"/>
-
-                    <TextView
-                        android:id="@+id/openAIStatus"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="OpenAI API: Not configured"
-                        android:textAppearance="?attr/textAppearanceBodyMedium"/>
-
-                </LinearLayout>
-
-            </com.google.android.material.card.MaterialCardView>
+            
 
             <!-- Actions Card -->
             <com.google.android.material.card.MaterialCardView

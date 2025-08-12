@@ -130,7 +130,7 @@ To use OpenAI's realtime transcription and translation:
 ### Architecture
 - **MainActivity**: UI and configuration management
 - **AudioCaptureService**: Handles audio capture and processing
-- **OpenAIRealtimeService**: Manages OpenAI WebSocket connections
+This app now runs fully locally using Sherpa-ONNX for speech-to-text and ML Kit for translation. OpenAI integration has been removed.
 - **TranslatorService**: Provides translation services
 - **FloatingOverlay**: Displays results in floating window
 - **TextAccessibilityService**: Captures text from other apps

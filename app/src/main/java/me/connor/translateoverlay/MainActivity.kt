@@ -18,22 +18,18 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
-import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.mlkit.nl.translate.TranslateLanguage
 
 class MainActivity : AppCompatActivity() {
     private lateinit var overlayStatus: TextView
     private lateinit var accessibilityStatus: TextView
-    private lateinit var openAIStatus: TextView
     private lateinit var requestOverlayBtn: MaterialButton
     private lateinit var requestAccessibilityBtn: MaterialButton
     private lateinit var overlay: FloatingOverlay
     private lateinit var sourceLanguageSpinner: MaterialAutoCompleteTextView
     private lateinit var targetLanguageSpinner: MaterialAutoCompleteTextView
     private lateinit var scrollView: androidx.core.widget.NestedScrollView
-    private lateinit var useOpenAISwitch: SwitchMaterial
     private lateinit var sharedPreferences: SharedPreferences
-    private lateinit var openAIConfigManager: OpenAIConfigManager
     private lateinit var showOverlayBtn: MaterialButton
     private lateinit var startTranscriptionBtn: MaterialButton
 
@@ -63,11 +59,7 @@ class MainActivity : AppCompatActivity() {
                 putExtra("code", result.resultCode)
                 putExtra("data", result.data)
                 putExtra("sourceLanguage", sharedPreferences.getString(PREF_SOURCE_LANG, DEFAULT_SOURCE_LANG))
-                putExtra("targetLanguage", openAIConfigManager.getTargetLanguage())
-                putExtra("useOpenAI", openAIConfigManager.getUseOpenAI())
-                putExtra("openAIApiKey", openAIConfigManager.getApiKey())
-                putExtra("openAIModel", openAIConfigManager.getModel())
-                putExtra("openAITemperature", openAIConfigManager.getTemperature())
+                putExtra("targetLanguage", sharedPreferences.getString(PREF_TARGET_LANG, DEFAULT_TARGET_LANG))
             }
             ContextCompat.startForegroundService(this, svc)
             isTranscriptionRunning = true
@@ -78,7 +70,9 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val PREFS_NAME = "TranslateOverlayPrefs"
         private const val PREF_SOURCE_LANG = "sourceLanguage"
+        private const val PREF_TARGET_LANG = "targetLanguage"
         private const val DEFAULT_SOURCE_LANG = TranslatorService.AUTO_DETECT  // Default to auto-detect
+        private const val DEFAULT_TARGET_LANG = TranslateLanguage.ENGLISH
         
         // Available source languages - using ML Kit constants
         private val SOURCE_LANGUAGES = listOf(
@@ -120,22 +114,20 @@ class MainActivity : AppCompatActivity() {
         }
 
         sharedPreferences = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        openAIConfigManager = OpenAIConfigManager(this)
+        
 
         overlay = FloatingOverlay(this)
         overlayStatus = findViewById(R.id.overlayStatus)
         accessibilityStatus = findViewById(R.id.accessibilityStatus)
-        openAIStatus = findViewById(R.id.openAIStatus)
         requestOverlayBtn = findViewById(R.id.requestOverlayBtn)
         requestAccessibilityBtn = findViewById(R.id.requestAccessibilityBtn)
         sourceLanguageSpinner = findViewById(R.id.sourceLanguageSpinner)
         targetLanguageSpinner = findViewById(R.id.targetLanguageSpinner)
-        useOpenAISwitch = findViewById(R.id.useOpenAISwitch)
         showOverlayBtn = findViewById(R.id.showOverlayBtn)
         startTranscriptionBtn = findViewById(R.id.startTranscriptionBtn)
 
         setupLanguageSpinners()
-        setupOpenAIConfiguration()
+        
 
         requestOverlayBtn.setOnClickListener {
             startActivity(
@@ -222,7 +214,7 @@ class MainActivity : AppCompatActivity() {
         targetLanguageSpinner.setAdapter(targetAdapter)
 
         // Set saved or default selection
-        val savedTargetLang = openAIConfigManager.getTargetLanguage()
+        val savedTargetLang = sharedPreferences.getString(PREF_TARGET_LANG, DEFAULT_TARGET_LANG)
         val targetIndex = TARGET_LANGUAGES.indexOfFirst { it.code == savedTargetLang }
         if (targetIndex >= 0) {
             targetLanguageSpinner.setText(TARGET_LANGUAGES[targetIndex].displayName, false)
@@ -232,44 +224,16 @@ class MainActivity : AppCompatActivity() {
         // Save selection when changed
         targetLanguageSpinner.setOnItemClickListener { _, _, position, _ ->
             val selectedLanguage = TARGET_LANGUAGES[position].code
-            openAIConfigManager.setTargetLanguage(selectedLanguage)
+            sharedPreferences.edit()
+                .putString(PREF_TARGET_LANG, selectedLanguage)
+                .apply()
         }
-    }
-
-    private fun setupOpenAIConfiguration() {
-        // Set initial switch state
-        useOpenAISwitch.isChecked = openAIConfigManager.getUseOpenAI()
-
-        // Handle switch changes
-        useOpenAISwitch.setOnCheckedChangeListener { _, isChecked ->
-            openAIConfigManager.setUseOpenAI(isChecked)
-            updateOpenAIStatus()
-        }
-
-        updateOpenAIStatus()
-    }
-
-    private fun updateOpenAIStatus() {
-        val useOpenAI = openAIConfigManager.getUseOpenAI()
-        val hasValidKey = openAIConfigManager.hasValidApiKey()
-        val apiKey = openAIConfigManager.getApiKey()
-        
-        val status = when {
-            !useOpenAI -> "OpenAI API: Disabled"
-            apiKey == null -> "OpenAI API: No API key configured ❌\nCreate local_config.properties file"
-            apiKey == "YOUR_OPENAI_API_KEY_HERE" -> "OpenAI API: Please replace placeholder with your API key ❌"
-            !hasValidKey -> "OpenAI API: Invalid API key format ❌\nKey should start with 'sk-'"
-            else -> "OpenAI API: Configured ✅"
-        }
-        
-        openAIStatus.text = status
     }
 
     override fun onResume() {
         super.onResume()
         updateOverlayStatus()
         updateAccessibilityStatus()
-        updateOpenAIStatus()
         // Update overlay state based on actual overlay status
         isOverlayShown = overlay.isShown()
         // Check if transcription service is running

@@ -11,11 +11,6 @@ class LocalConfigManager(private val context: Context) {
         private const val TAG = "LocalConfigManager"
         private const val CONFIG_FILE_NAME = "local_config.properties"
         private const val DEFAULT_CONFIG_FILE_NAME = "default_config.properties"
-        
-        // Property keys
-        private const val KEY_OPENAI_API_KEY = "openai.api.key"
-        private const val KEY_OPENAI_MODEL = "openai.model"
-        private const val KEY_OPENAI_TEMPERATURE = "openai.temperature"
     }
 
     private var properties: Properties? = null
@@ -51,25 +46,5 @@ class LocalConfigManager(private val context: Context) {
         }
     }
 
-    fun getOpenAIApiKey(): String? {
-        val apiKey = properties?.getProperty(KEY_OPENAI_API_KEY)
-        return if (apiKey.isNullOrBlank() || apiKey == "YOUR_OPENAI_API_KEY_HERE") {
-            null
-        } else {
-            apiKey
-        }
-    }
-
-    fun getOpenAIModel(): String {
-        return properties?.getProperty(KEY_OPENAI_MODEL, "whisper-1") ?: "whisper-1"
-    }
-
-    fun getOpenAITemperature(): Float {
-        return properties?.getProperty(KEY_OPENAI_TEMPERATURE, "0.0")?.toFloatOrNull() ?: 0.0f
-    }
-
-    fun hasValidApiKey(): Boolean {
-        val apiKey = getOpenAIApiKey()
-        return !apiKey.isNullOrBlank() && apiKey.startsWith("sk-")
-    }
+    // No remote keys needed in local-only mode
 } 

@@ -49,10 +49,6 @@ class AudioCaptureService : Service() {
 
     // STT engine abstraction
     private var sttEngine: me.connor.translateoverlay.stt.SpeechToTextEngine? = null
-    private var useOpenAI = false
-    private var openAIApiKey: String? = null
-    private var openAIModel: String = "whisper-1"
-    private var openAITemperature: Float = 0.0f
 
     private var translatorService: TranslatorService? = null
     private var isBound = false
@@ -61,8 +57,7 @@ class AudioCaptureService : Service() {
     private var lastPreviewTimeMs: Long = 0
     private val PREVIEW_MIN_INTERVAL_MS = 900L
 
-    // OpenAI sentence/partial buffering to mirror Sherpa flow
-    private val openAIBuffer = StringBuilder()
+    
 
     // Sherpa restart/backoff controls
     private var sherpaRestartAttempts = 0
@@ -122,12 +117,6 @@ class AudioCaptureService : Service() {
         sourceLanguage = intent.getStringExtra("sourceLanguage") ?: sourceLanguage
         targetLanguage = intent.getStringExtra("targetLanguage") ?: targetLanguage
 
-        // Get OpenAI settings
-        useOpenAI = intent.getBooleanExtra("useOpenAI", false)
-        openAIApiKey = intent.getStringExtra("openAIApiKey")
-        openAIModel = intent.getStringExtra("openAIModel") ?: "whisper-1"
-        openAITemperature = intent.getFloatExtra("openAITemperature", 0.0f)
-
         // Pass language settings to translator service
         Intent(this, TranslatorService::class.java).also { translatorIntent ->
             translatorIntent.putExtra("sourceLanguage", sourceLanguage)
@@ -162,51 +151,9 @@ class AudioCaptureService : Service() {
             .setAudioPlaybackCaptureConfig(config)
             .build()
 
-        if (useOpenAI && !openAIApiKey.isNullOrBlank()) initOpenAI(sampleRate) else initSherpa(sampleRate)
+        initSherpa(sampleRate)
         
         return START_STICKY
-    }
-
-    private fun initOpenAI(sampleRate: Int) {
-        try {
-            Log.d(TAG, "Init OpenAI engine: model=$openAIModel, src=$sourceLanguage, temp=$openAITemperature")
-            sttEngine = me.connor.translateoverlay.stt.OpenAISttEngine(
-                apiKey = openAIApiKey!!,
-                model = openAIModel,
-                language = sourceLanguage,
-                temperature = openAITemperature.toDouble()
-            ).also { engine ->
-                engine.start(object : me.connor.translateoverlay.stt.SpeechToTextEngine.Listener {
-                    override fun onPartial(text: String) {
-                        // Show preview based on buffered remainder + new partial
-                        val combined = (openAIBuffer.toString() + " " + text).trim()
-                        val (_, remainder) = TextProcessingUtils.splitCompletedSentences(combined)
-                        Log.d(TAG, "OpenAI partial: combinedLen=${combined.length}, remainder='${remainder.take(40)}'")
-                        if (remainder.isNotBlank()) throttledPreview(remainder)
-                    }
-                    override fun onFinal(text: String) {
-                        // Buffer, then drain completed sentences
-                        if (text.isNotBlank()) {
-                            Log.d(TAG, "OpenAI final segment: '${text.take(80)}'")
-                            openAIBuffer.append(text)
-                            drainOpenAIBuffer()
-                        }
-                    }
-                    override fun onError(message: String) {
-                        Log.e(TAG, "OpenAI error: $message")
-                    }
-                    override fun onStatus(connected: Boolean) {
-                        Log.i(TAG, "OpenAI connection status: $connected")
-                    }
-                })
-            }
-
-            recorder.startRecording()
-            executor.execute { processAudioLoop(sampleRate) }
-        } catch (e: Exception) {
-            Log.e(TAG, "OpenAI initialization error", e)
-            initSherpa(sampleRate)
-        }
     }
 
     private fun processAudioLoop(sampleRate: Int) {
@@ -234,23 +181,7 @@ class AudioCaptureService : Service() {
     // ──────────────────────────────────────────────────────────────────────────────
     // OpenAI remainder preview (throttled)
     // ──────────────────────────────────────────────────────────────────────────────
-    private fun throttledPreview(remainder: String) {
-        val now = System.currentTimeMillis()
-        if (now - lastPreviewTimeMs < PREVIEW_MIN_INTERVAL_MS) return
-        lastPreviewTimeMs = now
-        val preview = TextProcessingUtils.normalizeAndSpace(remainder).let {
-            if (it.endsWith("…") || it.endsWith(".")) it else "$it …"
-        }
-        Log.d(TAG, "Preview: '${preview.take(80)}'")
-        if (sourceLanguage != targetLanguage) {
-            translatorService?.translateText(preview) { translated ->
-                val safe = translated ?: preview
-                overlay.updateText(TextProcessingUtils.normalizeAndSpace(safe) + " ")
-            }
-        } else {
-            overlay.updateText(preview + " ")
-        }
-    }
+    
 
     private fun initSherpa(sampleRate: Int) {
         val am = applicationContext.assets
@@ -346,12 +277,7 @@ class AudioCaptureService : Service() {
         
         // Clean up STT engine
         sttEngine?.stop()
-        // Flush any remaining buffered OpenAI text
-        if (openAIBuffer.isNotBlank()) {
-            val remaining = openAIBuffer.toString().trim()
-            if (remaining.isNotEmpty()) handleFinalSentence(remaining)
-            openAIBuffer.clear()
-        }
+        
         
         // Clean up resources
         mediaProjection.stop()
@@ -370,7 +296,7 @@ class AudioCaptureService : Service() {
             NotificationChannel(channelId, "Sherpa-ASR Overlay", NotificationManager.IMPORTANCE_LOW)
         )
         return NotificationCompat.Builder(this, channelId)
-            .setContentTitle(if (useOpenAI) "OpenAI Realtime Service" else "Sherpa-ASR Service")
+            .setContentTitle("Sherpa-ASR Service")
             .setContentText("Transcribing device audio…")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .build()
@@ -399,14 +325,5 @@ class AudioCaptureService : Service() {
         }
     }
 
-    private fun drainOpenAIBuffer() {
-        if (openAIBuffer.isBlank()) return
-        val text = openAIBuffer.toString()
-        val (sentences, remainder) = TextProcessingUtils.splitCompletedSentences(text)
-        for (sentence in sentences) {
-            handleFinalSentence(sentence)
-        }
-        openAIBuffer.clear()
-        openAIBuffer.append(remainder)
-    }
+    // OpenAI buffer logic removed in local-only mode
 }
