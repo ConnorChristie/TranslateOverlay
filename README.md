@@ -1,4 +1,4 @@
-## TranslateOverlay (local-only)
+## TranslateOverlay
 
 TranslateOverlay is an on-screen caption overlay for Android that transcribes device audio and optionally translates it — all on-device. It shows live captions in a draggable floating window above any app.
 
@@ -9,45 +9,7 @@ TranslateOverlay is an on-screen caption overlay for Android that transcribes de
 - Displays captions in a clean floating overlay with a compact control bar
 
 ### What it does NOT do
-- No cloud processing and no OpenAI usage (removed). All processing happens locally on the device. Translation models are downloaded by ML Kit when needed.
-
----
-
-## Architecture overview
-
-- `AudioCaptureService` (Foreground Service)
-  - Requests MediaProjection token (via `MainActivity`) and captures device audio frames.
-  - Feeds PCM16 audio to `SherpaSttEngine` for streaming ASR.
-  - Sends final sentences to the UI overlay.
-  - If source and target languages differ, hands text to `TranslatorService` for ML Kit translation before displaying.
-
-- `TranslatorService` (Background Service)
-  - Uses ML Kit Language ID to detect language when source is set to Auto Detect.
-  - Uses ML Kit Translate to translate to the selected target language.
-  - Lazily downloads and caches the required translation models (Wi‑Fi required by default).
-
-- `FloatingOverlay` + `CaptionOverlay`
-  - A `WindowManager`-backed floating view that displays the latest captions.
-  - Tap overlay to toggle the control bar (language selector + close button).
-  - Drag to move; snaps to screen edges when you release.
-  - Static width ~85% of screen; automatically re-applies on rotation.
-  - Long‑press the overlay for quick settings (text size, background opacity, reset position).
-
----
-
-## Current UI flow
-
-1. Open the app and grant the "Draw over other apps" permission when prompted.
-2. In the app, pick Source and Target languages:
-   - Source defaults to Auto Detect.
-   - Target defaults to English and is stored in shared preferences.
-3. Tap "Show Overlay" to display the floating captions window.
-4. Tap "Start Transcription" to begin capturing and transcribing device audio.
-5. In the overlay:
-   - Tap to show/hide the bottom control bar.
-   - Use the language spinner to change the Source language on the fly.
-   - Tap the close button to stop services and remove the overlay.
-   - Long‑press the overlay to tweak font size and background opacity or reset position.
+- No cloud processing. All processing happens locally on the device. Translation models are downloaded by ML Kit when needed.
 
 ---
 
@@ -75,20 +37,6 @@ From the project root:
 ```
 
 Launch the app, grant overlay permission, then show the overlay and start transcription.
-
----
-
-## Key implementation files
-
-- `app/src/main/java/me/connor/translateoverlay/AudioCaptureService.kt`
-- `app/src/main/java/me/connor/translateoverlay/TranslatorService.kt`
-- `app/src/main/java/me/connor/translateoverlay/FloatingOverlay.kt`
-- `app/src/main/java/me/connor/translateoverlay/CaptionOverlay.kt`
-- `app/src/main/java/me/connor/translateoverlay/stt/SherpaSttEngine.kt`
-
-Removed (legacy cloud integration):
-- OpenAI-related files and UI have been deleted.
-- Accessibility overlay feature has been removed.
 
 ---
 
@@ -123,5 +71,3 @@ Removed (legacy cloud integration):
 
 - Overlay not visible after rotation:
   - Tap "Show Overlay" again, or long‑press and use Reset Position in quick settings
-
----
