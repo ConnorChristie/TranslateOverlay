@@ -88,6 +88,10 @@ class AudioCaptureService : Service() {
         }
     }
 
+    // Build a running, cumulative transcript that we hand to the overlay so it can
+    // compute stable deltas and apply its tail guard. This keeps updates smooth.
+    private val fullTranscript = StringBuilder()
+
     override fun onCreate() {
         super.onCreate()
         overlay = FloatingOverlay(this)
@@ -316,11 +320,13 @@ class AudioCaptureService : Service() {
         if (sourceLanguage != targetLanguage) {
             translatorService?.translateText(sentence) { translated ->
                 val safeText = translated ?: sentence
-                overlay.updateText(TextProcessingUtils.normalizeAndSpace(safeText) + " ")
+                fullTranscript.append(TextProcessingUtils.normalizeAndSpace(safeText)).append(' ')
+                overlay.updateText(fullTranscript.toString())
                 Log.i(TAG, "Transcription + translation: $sentence -> ${translated ?: "(fallback original)"}")
             }
         } else {
-            overlay.updateText(TextProcessingUtils.normalizeAndSpace(sentence) + " ")
+            fullTranscript.append(TextProcessingUtils.normalizeAndSpace(sentence)).append(' ')
+            overlay.updateText(fullTranscript.toString())
             Log.i(TAG, "Transcription: $sentence")
         }
     }

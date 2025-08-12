@@ -48,7 +48,7 @@ class CaptionOverlay @JvmOverloads constructor(
     defStyleAttr: Int = 0,
     private val maxVisibleLines: Int = 4,
     private val anchorChars: Int = 32,        // ≈ 5–6 English words
-    private val ringCapacity: Int = 512       // how many *completed* lines we keep
+     private val ringCapacity: Int = 512       // how many *completed* lines we keep
 ) : FrameLayout(context, attrs, defStyleAttr) {
 
     /** Buffer that stores completed *lines* (not constant‑time growth/trim). */
@@ -145,10 +145,10 @@ class CaptionOverlay @JvmOverloads constructor(
                         .putExtra("language_code", languageCodes[position])
                         .setPackage(context.packageName)
                 )
-                // Keep controls visible while interacting
+                // Close controls after a selection to return to a clean overlay
                 isSpinnerOpen = false
-                // Allow a short grace period after selection before auto-hide resumes
                 isInteractingWithControls = false
+                hideControls()
             }
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
@@ -190,6 +190,12 @@ class CaptionOverlay @JvmOverloads constructor(
 
     /** If true, broadcast a stop request when this view detaches (used for STT overlay). */
     var stopServicesOnDetach: Boolean = false
+
+     // Guard band to reduce jumpy tail updates from backtracking ASR/MT
+     // Withhold the last N words (when whitespace-separated) or M chars
+     // for non-whitespace scripts until a sentence boundary is observed.
+     private val guardWords: Int = 2
+     private val guardChars: Int = 8
 
     init {
         // Load user settings
@@ -250,6 +256,9 @@ class CaptionOverlay @JvmOverloads constructor(
         // Handle taps on the overlay
         setOnClickListener {
             if (controlBar.visibility == View.VISIBLE) {
+                // If the spinner just closed, ensure flags don't block manual hide
+                isInteractingWithControls = false
+                isSpinnerOpen = false
                 hideControls()
             } else {
                 showControls()
@@ -427,7 +436,7 @@ class CaptionOverlay @JvmOverloads constructor(
         val lines = ArrayList<String>(maxVisibleLines)
         lines += ring.takeLast(maxVisibleLines - 1)
 
-        if (currentLine.isNotBlank()) lines += currentLine.toString()
+        if (currentLine.isNotBlank()) lines += computeDisplayCurrent()
 
         // keep at most 3 lines visible
         runOnMain {
@@ -439,6 +448,40 @@ class CaptionOverlay @JvmOverloads constructor(
             }
         }
     }
+
+     /**
+      * Returns the current line with a small trailing "guard" withheld unless
+      * we have a clear sentence boundary. This reduces visual jitter from
+      * backtracking recognition or translation.
+      */
+     private fun computeDisplayCurrent(): String {
+         val s = currentLine.toString()
+         if (s.isBlank()) return s
+         if (endsWithSentenceTerminator(s)) return s
+
+         // Prefer withholding by words when we have whitespace-separated tokens
+         val parts = s.trimEnd().split(Regex("\\s+")).filter { it.isNotEmpty() }
+         return if (parts.size > guardWords) {
+             // Keep everything except the last guardWords tokens
+             val keepCount = parts.size - guardWords
+             // Rebuild using original spacing as best-effort by joining with single spaces
+             parts.take(keepCount).joinToString(" ")
+         } else {
+             // No clear word boundaries (e.g., CJK) — withhold a few trailing chars
+             val trimmed = s.trimEnd()
+             val keep = (trimmed.length - guardChars).coerceAtLeast(0)
+             trimmed.substring(0, keep)
+         }
+     }
+
+     private fun endsWithSentenceTerminator(s: String): Boolean {
+         // Look at the last non-whitespace char
+         val last = s.trimEnd().lastOrNull() ?: return false
+         return when (last) {
+             '.', '!', '?', '。', '！', '？', '…' -> true
+             else -> false
+         }
+     }
 
     private fun runOnMain(block: () -> Unit) {
         Handler(Looper.getMainLooper()).post(block)
