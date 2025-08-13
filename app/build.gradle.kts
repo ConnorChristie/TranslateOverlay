@@ -52,10 +52,8 @@ dependencies {
     implementation(libs.translate)
     implementation(libs.languageid)
     implementation(files("libs/sherpa-onnx-1.12.7.aar"))
-    implementation("com.google.android.material:material:1.11.0")
-    
-    // Coroutines used in services/processing
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    implementation("com.google.android.material:material:1.12.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
