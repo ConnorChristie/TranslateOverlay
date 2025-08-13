@@ -96,8 +96,11 @@ class FloatingOverlay(private val context: Context) {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = prefs.getInt(KEY_X, 100)
-            y = prefs.getInt(KEY_Y, 200)
+            val dm = context.resources.displayMetrics
+            val defaultX = ((dm.widthPixels - overlayW) / 2).coerceAtLeast(0)
+            val defaultY = (dm.heightPixels * 0.68).toInt() // near bottom like screenshot
+            x = prefs.getInt(KEY_X, defaultX)
+            y = prefs.getInt(KEY_Y, defaultY)
         }
 
         windowManager.addView(overlayView, params)
@@ -141,12 +144,13 @@ class FloatingOverlay(private val context: Context) {
     private fun resetPosition() {
         params?.let {
             val screenW = context.resources.displayMetrics.widthPixels
-            val defaultW = (screenW * 0.8).toInt()
+            val defaultW = (screenW * 0.85).toInt()
             val minW = 200.dp
             val overlayW = defaultW.coerceIn(minW, screenW)
             it.width = overlayW
-            it.x = 100
-            it.y = 200
+            val dm = context.resources.displayMetrics
+            it.x = ((dm.widthPixels - overlayW) / 2).coerceAtLeast(0)
+            it.y = (dm.heightPixels * 0.68).toInt()
             windowManager.updateViewLayout(overlayView, it)
             prefs.edit()
                 .putInt(KEY_X, it.x)

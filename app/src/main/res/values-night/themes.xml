@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+	<style name="Theme.TranslateOverlay" parent="Theme.Material3.DayNight.NoActionBar">
+		<item name="android:forceDarkAllowed">true</item>
+		<item name="android:windowLightStatusBar">false</item>
+		<item name="android:statusBarColor">@android:color/transparent</item>
+		<!-- Use surface color for navigation bar to avoid overlaying content -->
+		<item name="android:navigationBarColor">?attr/colorSurface</item>
+		<item name="android:windowBackground">?attr/colorSurface</item>
+		<item name="android:colorBackground">?attr/colorSurface</item>
+	</style>
+</resources>
+

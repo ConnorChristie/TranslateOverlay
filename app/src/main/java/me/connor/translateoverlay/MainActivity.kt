@@ -11,7 +11,6 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.ArrayAdapter
-import android.widget.TextView
 import android.widget.AdapterView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -31,7 +30,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var sharedPreferences: SharedPreferences
     
     private lateinit var startTranscriptionBtn: MaterialButton
-    private lateinit var statusText: TextView
+    
 
     private lateinit var mediaProjectionManager: MediaProjectionManager
 
@@ -117,7 +116,7 @@ class MainActivity : AppCompatActivity() {
         sourceLanguageSpinner = findViewById(R.id.sourceLanguageSpinner)
         targetLanguageSpinner = findViewById(R.id.targetLanguageSpinner)
         startTranscriptionBtn = findViewById(R.id.startTranscriptionBtn)
-        statusText = findViewById(R.id.statusText)
+        
 
         setupLanguageSpinners()
         
@@ -136,10 +135,10 @@ class MainActivity : AppCompatActivity() {
                             Uri.parse("package:$packageName")
                         )
                     )
-                    statusText.text = "Overlay permission required"
+                    startTranscriptionBtn.text = "Overlay permission required"
                     return@setOnClickListener
                 }
-                statusText.text = "Preparing…"
+                startTranscriptionBtn.text = "Preparing…"
                 mediaProjectionManager = getSystemService(
                     Context.MEDIA_PROJECTION_SERVICE
                 ) as MediaProjectionManager
@@ -255,11 +254,11 @@ class MainActivity : AppCompatActivity() {
     
 
     private fun updateButtonStates() {
-        startTranscriptionBtn.text = if (isTranscriptionRunning) "Stop Translating" else "Start Translating"
+        startTranscriptionBtn.text = if (isTranscriptionRunning) "Stop" else "Start"
         // Disable language pickers while running
         sourceLanguageSpinner.isEnabled = !isTranscriptionRunning
         targetLanguageSpinner.isEnabled = !isTranscriptionRunning
-        statusText.text = if (isTranscriptionRunning) "Transcribing and translating…" else "Ready"
+        
     }
 
     override fun onDestroy() {

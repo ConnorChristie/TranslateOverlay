@@ -568,7 +568,10 @@ class CaptionOverlay @JvmOverloads constructor(
     }
 
     private fun pxToSp(px: Float): Float {
-        return px / resources.displayMetrics.scaledDensity
+        val config = resources.configuration
+        val density = config.densityDpi / android.util.DisplayMetrics.DENSITY_DEFAULT.toFloat()
+        val scaledDensity = config.fontScale * density
+        return px / scaledDensity
     }
 
     private fun saveTextSize(sp: Float) {
